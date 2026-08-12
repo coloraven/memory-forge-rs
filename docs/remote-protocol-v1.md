@@ -26,6 +26,11 @@ generates and persists a random 64-character access token in the application dat
 The settings screen renders a QR code for the fragment-based token handoff described below. An
 explicit token revocation/rotation UI is not implemented in v1.
 
+When LAN mode starts, the host enumerates operational private interfaces and places the address
+selected by the default route first. The settings UI keeps the other eligible addresses available
+for multi-NIC, VPN, WSL and Hyper-V hosts, so the user can choose the address reachable by the phone
+before copying the link or rendering the QR code.
+
 ## Envelope
 
 Successful responses use:
@@ -79,6 +84,42 @@ All protocol routes except `/health` live under `/api/v1`.
 
 Session keys remain opaque query values. Clients must not parse filesystem paths from them.
 
+### Session capabilities
+
+`SessionDetail` includes an append-only `capabilities` object derived from the authoritative
+adapter snapshot:
+
+```json
+{
+  "edit": true,
+  "erase": true,
+  "restore": true,
+  "resume": true,
+  "fork": false,
+  "rawTerminal": true,
+  "liveStructuredEvents": false
+}
+```
+
+Mutation values reflect whether the snapshot has editable records. `resume` and `fork` reflect
+host-derived commands, while `rawTerminal` indicates that at least one approved terminal command
+can be launched. `liveStructuredEvents` remains false because v1 does not expose a structured
+event stream.
+
+Remote clients must intersect these per-session values with bootstrap authorization:
+`sessionEdit` gates edit, erase and restore; `terminal` gates resume, fork and raw terminal.
+The server also clears effective detail capabilities for disabled remote features and for platform
+operations that are not safe remotely. Clients connecting to an older v1 server may fall back to
+the existing block `editable` and command fields when `capabilities` is absent.
+
+### Structured refresh
+
+Desktop and remote-web clients refresh only the visible active session with an authoritative
+`session-detail` request every 8 seconds. Background tabs are not polled. Refresh pauses while the
+document is hidden or the active message editor is open, and visibility/focus restoration triggers
+an immediate check. A changed `revision` replaces the active snapshot; failures retain the last
+successful snapshot. Realtime events are not required for correctness.
+
 ## Mutations
 
 Mutation routes are implemented but return `REMOTE_CAPABILITY_UNAVAILABLE` while the daemon
@@ -119,6 +160,11 @@ authoritative session and chooses its own platform command; a remote request can
 executable or arbitrary shell command. Repeating a start request for the same owned `terminalId`
 returns the existing snapshot, which makes retries safe.
 
+The host rebuilds the approved terminal command from the authoritative platform, session ID and
+command kind, then checks it against the advertised snapshot command. Session IDs containing shell
+metacharacters, whitespace, line breaks or option-like leading hyphens do not advertise terminal
+capabilities and cannot reach the shell launcher.
+
 Each output chunk has a monotonic cursor. The browser polls from its last cursor, so a page refresh
 can list the same terminal, restore buffered output and continue polling while the desktop process
 is still running. If the requested cursor has fallen out of the bounded history, the response sets
@@ -144,6 +190,15 @@ fragment from the visible URL, and sends `Authorization: Bearer <token>` for pro
 
 Static assets, `/health` and `/api/v1/bootstrap` remain public so a phone can load the access gate
 and discover whether authentication is required. Session snapshots and all mutations are protected.
+
+## Host-side Smoke Test
+
+`npm run test:remote` performs a read-only contract check against a running daemon. It verifies the
+public health endpoint and security headers, the public bootstrap response, unauthenticated rejection
+when auth is required, and an authenticated dashboard snapshot. The token is accepted only through
+the `MEMORY_FORGE_REMOTE_TOKEN` environment variable and is never printed by the script. The target
+defaults to `http://127.0.0.1:7331` and can be changed with a positional URL (or direct Node
+`--url`) or `MEMORY_FORGE_REMOTE_URL`.
 
 ## Security Boundary
 

@@ -9,6 +9,7 @@ const PromptsPage = lazy(() => import("@/app/routes/prompts"));
 const AboutPage = lazy(() => import("@/app/routes/about"));
 const PlatformPage = lazy(() => import("@/app/routes/platform"));
 const TerminalSessionsPage = lazy(() => import("@/app/routes/terminal-sessions"));
+const RemoteMemoryPage = lazy(() => import("@/app/routes/remote-memory"));
 
 function TerminalSessionsRoute() {
   const { isRemote, remoteCapabilities } = useDesktop();
@@ -28,6 +29,7 @@ const createAppRouter = () =>
         { path: "settings", element: <SettingsPage /> },
         { path: "prompts", element: <PromptsPage /> },
         { path: "about", element: <AboutPage /> },
+        { path: "memory", element: <RemoteMemoryPage /> },
         { path: "terminal-sessions", element: <TerminalSessionsRoute /> },
         { path: ":platform", element: <PlatformPage /> },
       ],

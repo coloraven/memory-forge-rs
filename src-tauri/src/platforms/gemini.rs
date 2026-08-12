@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::atomic_file::replace_existing_file_atomic;
 
 use super::{
-    extract_snippet, ContentMatch, PlatformAdapter, SessionDetail, SessionListItem,
+    build_commands, extract_snippet, ContentMatch, PlatformAdapter, SessionDetail, SessionListItem,
     SessionListResult, TimelineBlock,
 };
 
@@ -541,13 +541,9 @@ impl PlatformAdapter for GeminiPlatform {
             });
         }
 
-        let mut commands = HashMap::new();
-        commands.insert(
-            "resume".to_string(),
-            format!("gemini --resume '{}'", session.session_id),
-        );
+        let commands = build_commands("gemini", &session.session_id);
 
-        Ok(SessionDetail {
+        Ok(crate::platforms::with_session_capabilities(SessionDetail {
             platform: "gemini".to_string(),
             session_key: session_key.to_string(),
             session_id: session.session_id,
@@ -555,9 +551,10 @@ impl PlatformAdapter for GeminiPlatform {
             alias_title,
             cwd,
             commands,
+            capabilities: Default::default(),
             revision: String::new(),
             blocks,
-        })
+        }))
     }
 
     fn update_message(&self, edit_target: &str, new_content: &str) -> Result<String, String> {

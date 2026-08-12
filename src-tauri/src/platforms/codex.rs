@@ -722,7 +722,7 @@ impl PlatformAdapter for CodexPlatform {
         let thread_id = self.thread_id(&lines, path);
         let alias = alias_map.get(session_key).cloned().unwrap_or_default();
 
-        Ok(SessionDetail {
+        Ok(crate::platforms::with_session_capabilities(SessionDetail {
             platform: "codex".to_string(),
             session_key: session_key.to_string(),
             session_id: thread_id.clone(),
@@ -734,9 +734,10 @@ impl PlatformAdapter for CodexPlatform {
             alias_title: alias,
             cwd: self.cwd(&lines),
             commands: build_commands("codex", &thread_id),
+            capabilities: Default::default(),
             revision: String::new(),
             blocks: self.blocks(&lines, session_key),
-        })
+        }))
     }
 
     fn update_message(&self, edit_target: &str, new_content: &str) -> Result<String, String> {
@@ -1387,11 +1388,29 @@ mod tests {
 
         let platform = CodexPlatform::new(codex_home, Some(project_root));
         let result = platform.list_sessions(&HashMap::new(), None, 0);
-
-        fs::remove_dir_all(root).ok();
-
         assert_eq!(result.total, 1);
         assert_eq!(result.items[0].session_id, "inside");
         assert_eq!(result.items[0].preview, "inside");
+
+        let detail = platform
+            .get_session_detail(&result.items[0].session_key, &HashMap::new())
+            .expect("load Codex detail");
+        assert!(detail.capabilities.edit);
+        assert!(detail.capabilities.erase);
+        assert!(detail.capabilities.restore);
+        assert!(detail.capabilities.resume);
+        assert!(!detail.capabilities.fork);
+        assert!(detail.capabilities.raw_terminal);
+        assert!(!detail.capabilities.live_structured_events);
+        let old = platform
+            .update_message(&detail.blocks[0].edit_target, "inside updated")
+            .expect("edit Codex message");
+        assert_eq!(old, "inside");
+        let updated = platform
+            .get_session_detail(&result.items[0].session_key, &HashMap::new())
+            .expect("reload Codex detail");
+        assert_eq!(updated.blocks[0].content, "inside updated");
+
+        fs::remove_dir_all(root).ok();
     }
 }

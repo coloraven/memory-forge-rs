@@ -92,6 +92,7 @@ export type MessageKey =
   | "remoteAllowTerminal"
   | "remoteAllowTerminalDesc"
   | "remotePort"
+  | "remoteAddress"
   | "remoteRestart"
   | "remoteRunning"
   | "remoteStopped"
@@ -104,6 +105,19 @@ export type MessageKey =
   | "remoteOpenNavigation"
   | "remoteCloseNavigation"
   | "remoteSessions"
+  | "remotePrimaryNavigation"
+  | "remoteNavSessions"
+  | "remoteNavTerminal"
+  | "remoteHomeHostSummary"
+  | "remoteHomeSearch"
+  | "remoteHomeRunning"
+  | "remoteHomeRecent"
+  | "remoteHomeRunningState"
+  | "remoteHomeIdleState"
+  | "remoteMemoryTitle"
+  | "remoteMemoryContextTitle"
+  | "remoteMemoryContextHint"
+  | "remoteSessionSwitcher"
   | "remoteOnline"
   | "remoteCompanion"
   | "remoteLocalConnection"
@@ -182,6 +196,8 @@ export type MessageKey =
   | "checkFailed"
   // Session
   | "session.sessions"
+  | "session.tabs"
+  | "session.closeTab"
   | "session.search"
   | "session.noSessions"
   | "session.justNow"
@@ -268,6 +284,17 @@ export type MessageKey =
   | "editLog.clear"
   | "editLog.clearConfirm"
   | "editLog.deleted"
+  | "editLog.locate"
+  | "editLog.reEdit"
+  | "editLog.copyBefore"
+  | "editLog.copyAfter"
+  | "inspector.title"
+  | "inspector.changes"
+  | "inspector.files"
+  | "inspector.memory"
+  | "inspector.unavailable"
+  | "inspector.changesUnavailable"
+  | "inspector.filesUnavailable"
   | "sidebar.collapse"
   | "sidebar.expand"
   | "sidebar.dragHint"
@@ -369,7 +396,15 @@ export type MessageKey =
   | "terminal.workspace.runningCount"
   | "terminal.workspace.openedAt"
   | "terminal.workspace.source"
-  | "terminal.workspace.externalFailed";
+  | "terminal.workspace.externalFailed"
+  | "terminal.drawer.title"
+  | "terminal.drawer.expand"
+  | "terminal.drawer.collapse"
+  | "terminal.drawer.unlinked"
+  | "terminal.drawer.select"
+  | "terminal.drawer.openWorkspace"
+  | "terminal.drawer.emptyTitle"
+  | "terminal.drawer.emptyDesc";
 
 const messages: Record<LocaleId, Record<MessageKey, string>> = {
   "zh-CN": {
@@ -459,6 +494,7 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     remoteAllowTerminal: "允许远程终端",
     remoteAllowTerminalDesc: "手机可以恢复或分支会话，并控制主机上的内嵌 CLI 进程。不会接受任意 shell 命令。",
     remotePort: "服务端口",
+    remoteAddress: "局域网访问地址",
     remoteRestart: "重启服务",
     remoteRunning: "服务运行中",
     remoteStopped: "服务未运行",
@@ -471,6 +507,19 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     remoteOpenNavigation: "打开平台导航",
     remoteCloseNavigation: "关闭平台导航",
     remoteSessions: "最近会话",
+    remotePrimaryNavigation: "主要导航",
+    remoteNavSessions: "会话",
+    remoteNavTerminal: "终端",
+    remoteHomeHostSummary: "{sessions} 个会话 · {terminals} 个终端运行中",
+    remoteHomeSearch: "搜索所有会话",
+    remoteHomeRunning: "正在进行",
+    remoteHomeRecent: "最近会话",
+    remoteHomeRunningState: "运行中",
+    remoteHomeIdleState: "空闲",
+    remoteMemoryTitle: "记忆审计",
+    remoteMemoryContextTitle: "所有历史修改都在这里",
+    remoteMemoryContextHint: "查看前后差异、定位原消息或恢复旧版本",
+    remoteSessionSwitcher: "切换已打开的会话",
     remoteOnline: "已连接",
     remoteCompanion: "局域网伴侣",
     remoteLocalConnection: "局域网连接",
@@ -545,6 +594,8 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     releaseNotes: "更新说明",
     checkFailed: "检查失败",
     "session.sessions": "会话",
+    "session.tabs": "打开的会话页签",
+    "session.closeTab": "关闭页签",
     "session.search": "搜索会话...",
     "session.noSessions": "暂无会话",
     "session.justNow": "刚刚",
@@ -630,6 +681,17 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "editLog.clear": "清空记录",
     "editLog.clearConfirm": "确定清空当前会话的全部修改记录吗？此操作不会撤销已经修改的内容。",
     "editLog.deleted": "修改记录已删除",
+    "editLog.locate": "定位消息",
+    "editLog.reEdit": "再次编辑",
+    "editLog.copyBefore": "复制修改前内容",
+    "editLog.copyAfter": "复制修改后内容",
+    "inspector.title": "检查器",
+    "inspector.changes": "变更",
+    "inspector.files": "文件",
+    "inspector.memory": "记忆",
+    "inspector.unavailable": "尚未接入",
+    "inspector.changesUnavailable": "代码变更检查将在后续版本接入。",
+    "inspector.filesUnavailable": "工作区文件浏览将在后续版本接入。",
     "sidebar.collapse": "收起菜单",
     "sidebar.expand": "展开菜单",
     "sidebar.dragHint": "拖动排序，或按 ↑ / ↓ 调整",
@@ -732,6 +794,14 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "terminal.workspace.openedAt": "打开于 {time}",
     "terminal.workspace.source": "来源：{platform}",
     "terminal.workspace.externalFailed": "外部终端启动失败，命令已复制到剪贴板。",
+    "terminal.drawer.title": "原始终端",
+    "terminal.drawer.expand": "展开原始终端",
+    "terminal.drawer.collapse": "收起原始终端",
+    "terminal.drawer.unlinked": "未关联终端",
+    "terminal.drawer.select": "选择当前会话的终端",
+    "terminal.drawer.openWorkspace": "在终端工作区打开",
+    "terminal.drawer.emptyTitle": "当前页签尚未关联终端",
+    "terminal.drawer.emptyDesc": "选择恢复或分支，在不离开结构化会话的情况下查看完整 CLI 输出。",
   },
   en: {
     appName: "Memory Forge",
@@ -820,6 +890,7 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     remoteAllowTerminal: "Allow remote terminal",
     remoteAllowTerminalDesc: "The phone can resume or fork a session and control its host CLI process. Arbitrary shell commands are rejected.",
     remotePort: "Service port",
+    remoteAddress: "Local network address",
     remoteRestart: "Restart service",
     remoteRunning: "Service running",
     remoteStopped: "Service stopped",
@@ -832,6 +903,19 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     remoteOpenNavigation: "Open platform navigation",
     remoteCloseNavigation: "Close platform navigation",
     remoteSessions: "Recent sessions",
+    remotePrimaryNavigation: "Primary navigation",
+    remoteNavSessions: "Sessions",
+    remoteNavTerminal: "Terminal",
+    remoteHomeHostSummary: "{sessions} sessions · {terminals} terminals running",
+    remoteHomeSearch: "Search all sessions",
+    remoteHomeRunning: "In progress",
+    remoteHomeRecent: "Recent",
+    remoteHomeRunningState: "Running",
+    remoteHomeIdleState: "Idle",
+    remoteMemoryTitle: "Memory audit",
+    remoteMemoryContextTitle: "Every historical change is recorded here",
+    remoteMemoryContextHint: "Compare revisions, locate the source message, or restore an earlier version",
+    remoteSessionSwitcher: "Switch open sessions",
     remoteOnline: "Connected",
     remoteCompanion: "LAN companion",
     remoteLocalConnection: "Local network",
@@ -906,6 +990,8 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     releaseNotes: "Release Notes",
     checkFailed: "Check failed",
     "session.sessions": "Sessions",
+    "session.tabs": "Open session tabs",
+    "session.closeTab": "Close tab",
     "session.search": "Search sessions...",
     "session.noSessions": "No sessions",
     "session.justNow": "Just now",
@@ -991,6 +1077,17 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "editLog.clear": "Clear logs",
     "editLog.clearConfirm": "Clear every edit record for this session? Existing message changes will not be reverted.",
     "editLog.deleted": "Edit record deleted",
+    "editLog.locate": "Locate message",
+    "editLog.reEdit": "Edit again",
+    "editLog.copyBefore": "Copy before content",
+    "editLog.copyAfter": "Copy after content",
+    "inspector.title": "Inspector",
+    "inspector.changes": "Changes",
+    "inspector.files": "Files",
+    "inspector.memory": "Memory",
+    "inspector.unavailable": "Not connected yet",
+    "inspector.changesUnavailable": "Code change inspection will be connected in a later release.",
+    "inspector.filesUnavailable": "Workspace file browsing will be connected in a later release.",
     "sidebar.collapse": "Collapse",
     "sidebar.expand": "Expand",
     "sidebar.dragHint": "Drag to reorder, or press ↑ / ↓",
@@ -1093,6 +1190,14 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "terminal.workspace.openedAt": "Opened at {time}",
     "terminal.workspace.source": "Source: {platform}",
     "terminal.workspace.externalFailed": "Could not open an external terminal. The command was copied to the clipboard.",
+    "terminal.drawer.title": "Raw Terminal",
+    "terminal.drawer.expand": "Expand raw terminal",
+    "terminal.drawer.collapse": "Collapse raw terminal",
+    "terminal.drawer.unlinked": "No terminal linked",
+    "terminal.drawer.select": "Select a terminal for this session",
+    "terminal.drawer.openWorkspace": "Open in terminal workspace",
+    "terminal.drawer.emptyTitle": "No terminal linked to this tab",
+    "terminal.drawer.emptyDesc": "Resume or fork without leaving the structured session to inspect the complete CLI output.",
   },
 };
 

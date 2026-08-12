@@ -792,7 +792,7 @@ impl PlatformAdapter for ClaudePlatform {
         let session_id = self.session_id(&lines, path);
         let alias = alias_map.get(session_key).cloned().unwrap_or_default();
 
-        Ok(SessionDetail {
+        Ok(crate::platforms::with_session_capabilities(SessionDetail {
             platform: "claude".to_string(),
             session_key: session_key.to_string(),
             session_id: session_id.clone(),
@@ -804,9 +804,10 @@ impl PlatformAdapter for ClaudePlatform {
             alias_title: alias,
             cwd: self.cwd(&lines),
             commands: build_commands("claude", &session_id),
+            capabilities: Default::default(),
             revision: String::new(),
             blocks: self.blocks(&lines, session_key),
-        })
+        }))
     }
 
     fn update_message(&self, edit_target: &str, new_content: &str) -> Result<String, String> {
@@ -994,6 +995,52 @@ fn truncate(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adapter_contract_lists_details_edits_and_declares_capabilities() {
+        let root = std::env::temp_dir().join(format!(
+            "memory-forge-claude-contract-{}",
+            std::process::id()
+        ));
+        let project_dir = root.join("projects").join("demo");
+        fs::create_dir_all(&project_dir).expect("create Claude project dir");
+        let session_path = project_dir.join("contract.jsonl");
+        fs::write(
+            &session_path,
+            serde_json::to_string(&json!({
+                "sessionId": "claude-contract",
+                "cwd": root.display().to_string(),
+                "message": { "role": "user", "content": "before" }
+            }))
+            .expect("serialize Claude fixture"),
+        )
+        .expect("write Claude fixture");
+
+        let platform = ClaudePlatform::new(root.clone());
+        let listed = platform.list_sessions(&HashMap::new(), None, 0);
+        assert_eq!(listed.total, 1);
+        let detail = platform
+            .get_session_detail(&listed.items[0].session_key, &HashMap::new())
+            .expect("load Claude detail");
+        assert!(detail.capabilities.edit);
+        assert!(detail.capabilities.erase);
+        assert!(detail.capabilities.restore);
+        assert!(detail.capabilities.resume);
+        assert!(detail.capabilities.fork);
+        assert!(detail.capabilities.raw_terminal);
+        assert!(!detail.capabilities.live_structured_events);
+
+        let old = platform
+            .update_message(&detail.blocks[0].edit_target, "after")
+            .expect("edit Claude message");
+        assert_eq!(old, "before");
+        let updated = platform
+            .get_session_detail(&listed.items[0].session_key, &HashMap::new())
+            .expect("reload Claude detail");
+        assert_eq!(updated.blocks[0].content, "after");
+
+        fs::remove_dir_all(root).ok();
+    }
 
     #[test]
     fn blocks_attach_tool_use_and_result_to_conversation_block() {

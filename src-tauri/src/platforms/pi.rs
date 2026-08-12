@@ -475,7 +475,7 @@ impl PlatformAdapter for PiPlatform {
             format!("pi --session \"{}\"", path.display()),
         );
 
-        Ok(SessionDetail {
+        Ok(crate::platforms::with_session_capabilities(SessionDetail {
             platform: "pi".to_string(),
             session_key: session_key.to_string(),
             session_id: scan.session_id,
@@ -483,9 +483,10 @@ impl PlatformAdapter for PiPlatform {
             alias_title,
             cwd: scan.cwd,
             commands,
+            capabilities: Default::default(),
             revision: String::new(),
             blocks,
-        })
+        }))
     }
 
     fn update_message(&self, edit_target: &str, new_content: &str) -> Result<String, String> {
@@ -1225,6 +1226,13 @@ mod tests {
         assert_eq!(detail.blocks[0].role, "user");
         assert_eq!(detail.blocks[1].role, "thinking");
         assert_eq!(detail.blocks[2].content, "hi");
+        assert!(detail.capabilities.edit);
+        assert!(detail.capabilities.erase);
+        assert!(detail.capabilities.restore);
+        assert!(detail.capabilities.resume);
+        assert!(!detail.capabilities.fork);
+        assert!(detail.capabilities.raw_terminal);
+        assert!(!detail.capabilities.live_structured_events);
 
         fs::remove_dir_all(root).ok();
     }

@@ -17,15 +17,13 @@ import { useDesktop } from '@/features/desktop/provider'
 
 export function EditMessageDialog() {
   const { t, state, dispatch, isRemote } = useDesktop()
-  const currentPlatform = state.currentPlatform
   const editingBlock = state.editingBlock
-  const selectedSessionKey = state.selectedSessionKey
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [revisionConflict, setRevisionConflict] = useState(false)
   const [showOriginal, setShowOriginal] = useState(false)
 
-  if (!editingBlock || !selectedSessionKey) {
+  if (!editingBlock) {
     return null
   }
 
@@ -50,21 +48,29 @@ export function EditMessageDialog() {
 
     try {
       await api.editMessage(
-        currentPlatform,
+        editingBlock.platform,
         editingBlock.id,
         editingBlock.content,
-        selectedSessionKey,
+        editingBlock.sessionKey,
         editingBlock.revision,
       )
       const [updated, logs] = await Promise.all([
-        api.getSessionDetail(currentPlatform, selectedSessionKey),
-        api.getEditLog(currentPlatform, selectedSessionKey),
+        api.getSessionDetail(editingBlock.platform, editingBlock.sessionKey),
+        api.getEditLog(editingBlock.platform, editingBlock.sessionKey),
       ])
 
       dispatch({ type: 'setSessionDetail', payload: updated })
-      dispatch({ type: 'setEditLog', payload: logs })
+      dispatch({ type: 'setEditLogForSession', payload: { platform: editingBlock.platform, sessionKey: editingBlock.sessionKey, editLog: logs } })
       dispatch({ type: 'setEditingBlock', payload: null })
-      dispatch({ type: 'setShowEditLog', payload: true })
+      const targetTab = state.workspace.openTabs.find(
+        (tab) => tab.platform === editingBlock.platform && tab.sessionKey === editingBlock.sessionKey,
+      )
+      if (targetTab) {
+        dispatch({
+          type: 'workspace',
+          payload: { type: 'restore-view-state', payload: { tabId: targetTab.id, state: { inspector: 'memory' } } },
+        })
+      }
       dispatch({ type: 'setSessionStatus', payload: { tone: 'success', message: t('session.messageSaved') } })
     } catch (error) {
       console.error('Failed to save edit:', error)
@@ -73,11 +79,11 @@ export function EditMessageDialog() {
         setRevisionConflict(true)
         try {
           const [updated, logs] = await Promise.all([
-            api.getSessionDetail(currentPlatform, selectedSessionKey),
-            api.getEditLog(currentPlatform, selectedSessionKey),
+            api.getSessionDetail(editingBlock.platform, editingBlock.sessionKey),
+            api.getEditLog(editingBlock.platform, editingBlock.sessionKey),
           ])
           dispatch({ type: 'setSessionDetail', payload: updated })
-          dispatch({ type: 'setEditLog', payload: logs })
+          dispatch({ type: 'setEditLogForSession', payload: { platform: editingBlock.platform, sessionKey: editingBlock.sessionKey, editLog: logs } })
         } catch (refreshError) {
           console.error('Failed to refresh after revision conflict:', refreshError)
         }

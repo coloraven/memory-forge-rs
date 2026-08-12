@@ -1,0 +1,946 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Memory Forge Mobile Companion Prototype</title>
+  <link rel="icon" href="data:," />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Space+Grotesk:wght@500;600&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --canvas: #090d0c;
+      --bg: #0f1413;
+      --surface: #151b19;
+      --surface-high: #1d2522;
+      --border: #303a36;
+      --text: #e7ede9;
+      --muted: #93a099;
+      --primary: #72d69f;
+      --secondary: #82a9ff;
+      --warning: #e5b868;
+      --danger: #ef817d;
+      --font-heading: "Space Grotesk", "Noto Sans SC", sans-serif;
+      --font-body: "Noto Sans SC", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background: var(--canvas);
+      font-family: var(--font-body);
+      letter-spacing: 0;
+    }
+
+    button, input, textarea { font: inherit; }
+    button { color: inherit; }
+
+    .proto-banner {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: #dbe8ff;
+      background: #24487f;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .stage {
+      min-height: calc(100vh - 34px);
+      padding: 44px 24px 54px;
+      overflow: hidden;
+    }
+
+    .stage-head {
+      width: min(1180px, 100%);
+      margin: 0 auto 26px;
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .eyebrow {
+      margin: 0 0 7px;
+      color: var(--primary);
+      font-family: var(--font-heading);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-family: var(--font-heading);
+      font-size: 25px;
+      line-height: 1.2;
+      font-weight: 600;
+    }
+
+    .stage-note {
+      max-width: 430px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+      text-align: right;
+    }
+
+    .phones {
+      width: min(1180px, 100%);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 24px;
+      align-items: start;
+    }
+
+    .phone-group { min-width: 0; }
+
+    .phone-label {
+      margin: 0 0 10px 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .phone-frame {
+      width: 100%;
+      max-width: 360px;
+      height: 740px;
+      margin: 0 auto;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid #3b4541;
+      border-radius: 42px;
+      background: var(--bg);
+      box-shadow: 0 24px 70px rgb(0 0 0 / 46%);
+    }
+
+    .phone-frame::before {
+      content: "";
+      position: absolute;
+      inset: 6px;
+      z-index: 10;
+      border: 1px solid rgb(255 255 255 / 5%);
+      border-radius: 36px;
+      pointer-events: none;
+    }
+
+    .dynamic-island {
+      position: absolute;
+      z-index: 20;
+      top: 10px;
+      left: 50%;
+      width: 96px;
+      height: 27px;
+      transform: translateX(-50%);
+      border-radius: 18px;
+      background: #050807;
+    }
+
+    .screen {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding-top: 42px;
+    }
+
+    .statusbar {
+      position: absolute;
+      top: 13px;
+      left: 23px;
+      right: 23px;
+      z-index: 21;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #d9dfdc;
+      font-family: var(--font-heading);
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    .status-icons { display: flex; gap: 5px; }
+
+    .appbar {
+      min-height: 54px;
+      padding: 0 17px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .appbar-title {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .appbar-title strong {
+      display: block;
+      overflow: hidden;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .appbar-title span {
+      display: block;
+      margin-top: 2px;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .icon-button {
+      width: 34px;
+      height: 34px;
+      flex: 0 0 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      border-radius: 8px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+    }
+
+    .icon-button:hover { color: var(--text); background: var(--surface-high); transform: translateY(-1px); }
+    .icon-button:active { transform: scale(.97); }
+    .icon-button:focus-visible, .action:focus-visible, .segment:focus-visible, .list-row:focus-visible {
+      outline: 2px solid var(--secondary);
+      outline-offset: 2px;
+    }
+
+    .scroll { min-height: 0; flex: 1; overflow-y: auto; scrollbar-width: none; }
+    .scroll::-webkit-scrollbar { display: none; }
+
+    .section-label {
+      padding: 16px 18px 7px;
+      color: #718079;
+      font-family: var(--font-heading);
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .host-row {
+      margin: 12px 14px 2px;
+      padding: 10px 11px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .host-mark {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      color: #07110c;
+      background: var(--primary);
+    }
+
+    .host-copy { min-width: 0; flex: 1; }
+    .host-copy strong { display: block; font-size: 11px; font-weight: 600; }
+    .host-copy span { display: block; margin-top: 1px; color: var(--muted); font-size: 9px; }
+
+    .online-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--primary);
+      box-shadow: 0 0 0 3px rgb(114 214 159 / 12%);
+    }
+
+    .list-row {
+      width: calc(100% - 22px);
+      margin: 0 11px;
+      padding: 10px 8px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      border: 0;
+      border-bottom: 1px solid rgb(48 58 54 / 58%);
+      color: inherit;
+      text-align: left;
+      background: transparent;
+      cursor: pointer;
+      transition: background 160ms ease, transform 160ms ease;
+    }
+
+    .list-row:hover { background: var(--surface); }
+    .list-row:active { transform: scale(.99); }
+
+    .provider-icon {
+      width: 25px;
+      height: 25px;
+      flex: 0 0 25px;
+      display: grid;
+      place-items: center;
+      margin-top: 1px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--muted);
+      background: var(--surface);
+    }
+
+    .list-main { min-width: 0; flex: 1; }
+    .list-main strong { display: block; overflow: hidden; font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+    .list-meta { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; color: var(--muted); font-size: 9px; }
+    .list-meta .branch { color: #b2c3bb; }
+
+    .row-status {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 9px;
+    }
+
+    .row-status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
+    .row-status .dot.warn { background: var(--warning); }
+    .row-status .dot.idle { background: #6d7873; }
+
+    .bottom-nav {
+      min-height: 58px;
+      padding: 7px 14px 10px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-top: 1px solid var(--border);
+      background: rgb(15 20 19 / 96%);
+    }
+
+    .nav-item {
+      border: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      color: #718079;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .nav-item span { font-size: 8px; }
+    .nav-item.active { color: var(--primary); }
+
+    .session-switcher {
+      min-height: 42px;
+      margin: 9px 12px 0;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      cursor: pointer;
+    }
+
+    .session-switcher span { min-width: 0; flex: 1; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+
+    .switcher-menu {
+      position: absolute;
+      z-index: 30;
+      top: 105px;
+      left: 16px;
+      right: 16px;
+      display: none;
+      overflow: hidden;
+      border: 1px solid #46524d;
+      border-radius: 10px;
+      background: #171e1c;
+      box-shadow: 0 18px 45px rgb(0 0 0 / 45%);
+    }
+
+    .switcher-menu.open { display: block; animation: menu-in 180ms ease-out; }
+
+    .switcher-option {
+      width: 100%;
+      padding: 11px 12px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+      text-align: left;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .switcher-option:last-child { border-bottom: 0; }
+    .switcher-option:hover { background: var(--surface-high); }
+    .switcher-option small { margin-left: auto; color: var(--muted); font-size: 8px; }
+
+    .chat-scroll { padding: 18px 17px 16px; }
+    .turn { margin-bottom: 17px; }
+    .turn-role { margin-bottom: 5px; color: var(--muted); font-size: 9px; }
+
+    .turn-body {
+      color: #d7dfda;
+      font-size: 10.5px;
+      line-height: 1.72;
+    }
+
+    .user-turn {
+      padding: 10px 11px;
+      border-left: 2px solid var(--secondary);
+      background: rgb(130 169 255 / 7%);
+    }
+
+    .mobile-message-actions { margin-top: 8px; display: flex; align-items: center; gap: 7px; }
+    .mobile-message-actions span { min-width: 0; flex: 1; color: var(--muted); font-size: 8px; }
+    .message-more {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #3d4944;
+      border-radius: 8px;
+      color: var(--warning);
+      background: var(--surface);
+      cursor: pointer;
+    }
+
+    .sheet-layer {
+      position: absolute;
+      inset: 0;
+      z-index: 50;
+      display: none;
+      align-items: flex-end;
+      border-radius: 42px;
+      background: rgb(2 6 5 / 62%);
+      backdrop-filter: blur(2px);
+    }
+    .sheet-layer.open { display: flex; animation: view-in 160ms ease-out; }
+    .memory-sheet {
+      width: 100%;
+      padding: 8px 15px 22px;
+      border-top: 1px solid #4a5651;
+      border-radius: 18px 18px 0 0;
+      background: #151c19;
+      box-shadow: 0 -20px 55px rgb(0 0 0 / 48%);
+    }
+    .sheet-grabber { width: 34px; height: 4px; margin: 0 auto 11px; border-radius: 3px; background: #52605a; }
+    .sheet-head { display: flex; align-items: center; gap: 9px; }
+    .sheet-head > i { color: var(--warning); }
+    .sheet-title { min-width: 0; flex: 1; }
+    .sheet-title strong { display: block; font-size: 12px; font-weight: 600; }
+    .sheet-title span { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
+    .sheet-field-label { margin: 13px 0 6px; display: flex; align-items: center; justify-content: space-between; color: #c2ccc6; font-size: 9px; }
+    .sheet-field-label span { color: var(--muted); font-size: 8px; }
+    .memory-sheet textarea { width: 100%; min-height: 112px; padding: 10px; resize: none; border: 1px solid #3e4a45; border-radius: 8px; outline: 0; color: var(--text); background: #0d1211; font-size: 10px; line-height: 1.65; }
+    .memory-sheet textarea:focus { border-color: var(--secondary); }
+    .sheet-warning { margin-top: 9px; padding: 8px 9px; display: flex; gap: 7px; border-left: 2px solid var(--warning); color: var(--muted); background: rgb(229 184 104 / 6%); font-size: 8px; line-height: 1.55; }
+    .sheet-actions { margin-top: 12px; display: grid; grid-template-columns: 44px 44px 1fr; gap: 8px; }
+    .sheet-icon-action, .sheet-save {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: #b7c2bc;
+      background: var(--surface-high);
+      cursor: pointer;
+    }
+    .sheet-icon-action.danger { color: var(--danger); }
+    .sheet-save { border-color: rgb(114 214 159 / 45%); color: #07110c; background: var(--primary); font-size: 10px; font-weight: 600; }
+
+    .tool-call {
+      margin: 8px 0;
+      padding: 8px 9px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      color: #b7c2bc;
+      background: var(--surface);
+      font-family: "Space Grotesk", sans-serif;
+      font-size: 9px;
+    }
+
+    .tool-call code { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+
+    .revision-rail {
+      margin: 14px 0 2px;
+      padding-left: 14px;
+      position: relative;
+    }
+
+    .revision-rail::before {
+      content: "";
+      position: absolute;
+      top: 2px;
+      bottom: 2px;
+      left: 4px;
+      width: 1px;
+      background: var(--warning);
+    }
+
+    .revision-rail::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 1px;
+      width: 7px;
+      height: 7px;
+      border: 2px solid var(--warning);
+      border-radius: 50%;
+      background: var(--bg);
+    }
+
+    .revision-rail strong { display: block; color: var(--warning); font-size: 9px; font-weight: 600; }
+    .revision-rail span { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
+
+    .composer {
+      margin: 0 12px 12px;
+      padding: 9px;
+      border: 1px solid #3b4742;
+      border-radius: 10px;
+      background: var(--surface);
+    }
+
+    .composer textarea {
+      width: 100%;
+      height: 44px;
+      resize: none;
+      border: 0;
+      outline: 0;
+      color: var(--text);
+      background: transparent;
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .composer textarea::placeholder { color: #7f8d86; }
+    .composer-row { display: flex; align-items: center; gap: 7px; }
+
+    .model-chip {
+      min-width: 0;
+      padding: 5px 7px;
+      border: 0;
+      border-radius: 6px;
+      color: #bcc7c1;
+      background: var(--surface-high);
+      font-size: 8px;
+      cursor: pointer;
+    }
+
+    .send-button {
+      width: 30px;
+      height: 30px;
+      margin-left: auto;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 8px;
+      color: #07110c;
+      background: var(--primary);
+      cursor: pointer;
+      transition: transform 160ms ease, filter 160ms ease;
+    }
+
+    .send-button:hover { filter: brightness(1.08); transform: translateY(-1px); }
+    .send-button:active { transform: scale(.97); }
+
+    .segments {
+      margin: 10px 13px 2px;
+      padding: 3px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .segment {
+      padding: 7px 5px;
+      border: 0;
+      border-radius: 6px;
+      color: var(--muted);
+      background: transparent;
+      font-size: 9px;
+      cursor: pointer;
+    }
+
+    .segment.active { color: var(--text); background: var(--surface-high); }
+    .panel { display: none; }
+    .panel.active { display: block; animation: view-in 200ms ease-out; }
+
+    .audit-summary {
+      margin: 13px 14px 5px;
+      padding-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .audit-number { font-family: var(--font-heading); font-size: 26px; font-weight: 600; }
+    .audit-summary div:last-child strong { display: block; font-size: 10px; font-weight: 600; }
+    .audit-summary div:last-child span { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
+
+    .audit-context {
+      margin: 10px 13px 0;
+      padding: 10px 11px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--muted);
+      background: var(--surface);
+    }
+    .audit-context > i { color: var(--warning); }
+    .audit-context div { min-width: 0; flex: 1; }
+    .audit-context strong { display: block; color: #c4cec8; font-size: 9px; font-weight: 500; }
+    .audit-context span { display: block; margin-top: 2px; font-size: 8px; }
+
+    .audit-item { padding: 12px 15px; border-bottom: 1px solid rgb(48 58 54 / 65%); }
+    .audit-head { display: flex; align-items: center; gap: 7px; }
+    .audit-head strong { min-width: 0; flex: 1; overflow: hidden; font-size: 10px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+    .audit-head time { color: var(--muted); font-size: 8px; }
+
+    .diff {
+      margin-top: 9px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      font-size: 9px;
+      line-height: 1.55;
+    }
+
+    .diff-line { padding: 6px 8px; }
+    .diff-line.old { color: #e6aaa7; background: rgb(239 129 125 / 9%); }
+    .diff-line.new { color: #a9dfbf; background: rgb(114 214 159 / 9%); }
+
+    .audit-actions { margin-top: 8px; display: flex; justify-content: flex-end; gap: 6px; }
+
+    .action {
+      padding: 6px 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: #b7c2bc;
+      background: transparent;
+      font-size: 8px;
+      cursor: pointer;
+    }
+
+    .action:hover { color: var(--text); background: var(--surface-high); transform: translateY(-1px); }
+    .action.primary { border-color: rgb(114 214 159 / 42%); color: var(--primary); }
+
+    .terminal-view { padding: 13px; }
+    .terminal-card { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: #0a0f0e; }
+    .terminal-head { padding: 8px 9px; display: flex; align-items: center; gap: 7px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 9px; }
+    .terminal-head span { margin-left: auto; color: var(--primary); }
+    .terminal-output { min-height: 390px; padding: 11px; color: #bbc8c0; font-family: "Space Grotesk", monospace; font-size: 9px; line-height: 1.65; white-space: pre-wrap; }
+    .terminal-output .cmd { color: var(--secondary); }
+    .terminal-output .ok { color: var(--primary); }
+
+    .toast {
+      position: absolute;
+      z-index: 40;
+      left: 50%;
+      bottom: 72px;
+      max-width: calc(100% - 34px);
+      padding: 8px 11px;
+      transform: translate(-50%, 12px);
+      border: 1px solid #46524d;
+      border-radius: 7px;
+      color: #dfe7e2;
+      background: #202825;
+      font-size: 9px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 180ms ease, transform 180ms ease;
+      white-space: nowrap;
+    }
+
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    @keyframes view-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes menu-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+
+    @media (max-width: 900px) {
+      .stage { padding-inline: 16px; overflow: visible; }
+      .stage-head { align-items: start; flex-direction: column; }
+      .stage-note { text-align: left; }
+      .phones { grid-template-columns: 1fr; gap: 34px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="proto-banner"><i data-lucide="flask-conical" width="14"></i> PROTO — Memory Forge 移动伴侣，仅供预览确认</div>
+  <main class="stage">
+    <header class="stage-head">
+      <div>
+        <p class="eyebrow">Memory Forge / Remote companion</p>
+        <h1>桌面会话，随身继续</h1>
+      </div>
+      <p class="stage-note">借鉴多工作区与移动端单任务导航，但围绕 Memory Forge 的会话恢复、远程终端和记忆审计重新设计。</p>
+    </header>
+
+    <section class="phones" aria-label="Memory Forge mobile companion screens">
+      <!-- Screen 1: workspace and session inbox -->
+      <article class="phone-group">
+        <p class="phone-label">01 · Workspaces / 会话总览</p>
+        <div class="phone-frame">
+          <div class="dynamic-island"></div>
+          <div class="statusbar"><span>10:23</span><span class="status-icons"><i data-lucide="signal" width="11"></i><i data-lucide="wifi" width="11"></i><i data-lucide="battery-full" width="12"></i></span></div>
+          <div class="screen">
+            <header class="appbar">
+              <div class="host-mark"><i data-lucide="anvil" width="16"></i></div>
+              <div class="appbar-title"><strong>Memory Forge</strong><span>移动伴侣</span></div>
+              <button class="icon-button" aria-label="搜索会话" onclick="showToast('toast-home', '搜索已聚焦')"><i data-lucide="search" width="17"></i></button>
+              <button class="icon-button" aria-label="筛选会话" onclick="showToast('toast-home', '仅显示需要处理的会话')"><i data-lucide="list-filter" width="17"></i></button>
+            </header>
+            <div class="scroll">
+              <div class="host-row">
+                <div class="host-mark"><i data-lucide="monitor-dot" width="15"></i></div>
+                <div class="host-copy"><strong>REZVK-PC</strong><span>局域网直连 · 12 个会话</span></div>
+                <span class="online-dot" aria-label="在线"></span>
+              </div>
+
+              <div class="section-label">正在进行</div>
+              <button class="list-row" onclick="showToast('toast-home', '打开：Memory Forge 远程工作台')">
+                <span class="provider-icon"><i data-lucide="terminal-square" width="14"></i></span>
+                <span class="list-main"><strong>Memory Forge 远程工作台</strong><span class="list-meta"><span>memory-forge-rs</span><span>·</span><span class="branch">feature/remote-foundation</span><span>·</span><span>刚刚</span></span></span>
+                <span class="row-status"><span class="dot"></span>运行中</span>
+              </button>
+              <button class="list-row" onclick="showToast('toast-home', '打开：Paseo 移动端研究')">
+                <span class="provider-icon"><i data-lucide="bot" width="14"></i></span>
+                <span class="list-main"><strong>Paseo 移动端研究</strong><span class="list-meta"><span>paseo</span><span>·</span><span class="branch">conductor-migration-scout</span><span>·</span><span>4 分钟</span></span></span>
+                <span class="row-status"><span class="dot warn"></span>待确认</span>
+              </button>
+              <button class="list-row" onclick="showToast('toast-home', '打开：Codex 会话索引修复')">
+                <span class="provider-icon"><i data-lucide="braces" width="14"></i></span>
+                <span class="list-main"><strong>Codex 会话索引修复</strong><span class="list-meta"><span>memory-forge-rs</span><span>·</span><span class="branch">main</span><span>·</span><span>18 分钟</span></span></span>
+                <span class="row-status"><span class="dot idle"></span>空闲</span>
+              </button>
+
+              <div class="section-label">今天</div>
+              <button class="list-row" onclick="showToast('toast-home', '打开：Grok 会话适配器')">
+                <span class="provider-icon"><i data-lucide="orbit" width="14"></i></span>
+                <span class="list-main"><strong>Grok 会话适配器</strong><span class="list-meta"><span>memory-forge-rs</span><span>·</span><span class="branch">feature/grok-build</span><span>·</span><span>2 小时</span></span></span>
+                <span class="row-status"><span class="dot idle"></span>完成</span>
+              </button>
+              <button class="list-row" onclick="showToast('toast-home', '打开：终端断线重连测试')">
+                <span class="provider-icon"><i data-lucide="square-terminal" width="14"></i></span>
+                <span class="list-main"><strong>终端断线重连测试</strong><span class="list-meta"><span>memory-forge-rs</span><span>·</span><span>Claude Code</span><span>·</span><span>5 小时</span></span></span>
+                <span class="row-status"><span class="dot idle"></span>完成</span>
+              </button>
+            </div>
+            <nav class="bottom-nav" aria-label="主要导航">
+              <button class="nav-item active" onclick="showToast('toast-home', '当前：会话')"><i data-lucide="messages-square" width="16"></i><span>会话</span></button>
+              <button class="nav-item" onclick="showToast('toast-home', '终端：2 个正在运行')"><i data-lucide="square-terminal" width="16"></i><span>终端</span></button>
+              <button class="nav-item" onclick="showToast('toast-home', '提示词库已打开')"><i data-lucide="library" width="16"></i><span>提示词</span></button>
+              <button class="nav-item" onclick="showToast('toast-home', '设置已打开')"><i data-lucide="settings" width="16"></i><span>设置</span></button>
+            </nav>
+            <div id="toast-home" class="toast" role="status"></div>
+          </div>
+        </div>
+      </article>
+
+      <!-- Screen 2: active session and remote composer -->
+      <article class="phone-group">
+        <p class="phone-label">02 · Agent / 远程继续会话</p>
+        <div class="phone-frame">
+          <div class="dynamic-island"></div>
+          <div class="statusbar"><span>10:24</span><span class="status-icons"><i data-lucide="signal" width="11"></i><i data-lucide="wifi" width="11"></i><i data-lucide="battery-medium" width="12"></i></span></div>
+          <div class="screen">
+            <header class="appbar">
+              <button class="icon-button" aria-label="返回会话" onclick="showToast('toast-chat', '返回会话总览')"><i data-lucide="chevron-left" width="18"></i></button>
+              <div class="appbar-title"><strong>memory-forge-rs</strong><span>feature/remote-foundation · REZVK-PC</span></div>
+              <button class="icon-button" aria-label="查看记忆修改" onclick="showToast('toast-chat', '打开记忆审计')"><i data-lucide="file-clock" width="17"></i></button>
+            </header>
+
+            <button class="session-switcher" aria-expanded="false" onclick="toggleSwitcher(this)">
+              <i data-lucide="bot" width="14"></i><span>Memory Forge 远程工作台</span><i data-lucide="chevron-down" width="14"></i>
+            </button>
+            <div id="switcher-menu" class="switcher-menu">
+              <button class="switcher-option" onclick="chooseSession('Memory Forge 远程工作台')"><i data-lucide="bot" width="14"></i><span>Memory Forge 远程工作台</span><small>运行中</small></button>
+              <button class="switcher-option" onclick="chooseSession('Codex 会话索引修复')"><i data-lucide="braces" width="14"></i><span>Codex 会话索引修复</span><small>空闲</small></button>
+              <button class="switcher-option" onclick="chooseSession('终端断线重连测试')"><i data-lucide="square-terminal" width="14"></i><span>终端断线重连测试</span><small>完成</small></button>
+            </div>
+
+            <div id="chat-scroll" class="scroll chat-scroll">
+              <div class="turn user-turn">
+                <div class="turn-role">你 · 10:19</div>
+                <div class="turn-body">把移动端做成真正的会话工作台：能切换多个 Agent、查看工具调用，也能在手机上继续输入。</div>
+                <div class="mobile-message-actions"><span><i data-lucide="history" width="10"></i> 历史消息 · revision 18</span><button class="message-more" aria-label="修改历史消息" onclick="openMemorySheet()"><i data-lucide="pencil-line" width="16"></i></button></div>
+              </div>
+              <div class="turn">
+                <div class="turn-role">Codex · 10:20</div>
+                <div class="turn-body">我先确认远程协议和当前终端能力，再把 Workspace 与会话页签拆成可以独立演进的状态模型。</div>
+                <div class="tool-call"><i data-lucide="terminal" width="13"></i><span>Shell</span><code>rg -n "remote|terminal|session" src src-tauri</code><i data-lucide="check" width="12" color="var(--primary)"></i></div>
+                <div class="tool-call"><i data-lucide="file-text" width="13"></i><span>Read</span><code>docs/remote-protocol-v1.md</code><i data-lucide="check" width="12" color="var(--primary)"></i></div>
+                <div class="turn-body">远程终端已具备重连和输入能力。下一层应当是持久化的会话页签，而不是继续扩展单选列表。</div>
+                <div class="revision-rail"><strong>记忆已修订</strong><span>修正了“手机端只读”的旧假设 · 可恢复</span></div>
+              </div>
+            </div>
+
+            <form class="composer" onsubmit="sendPrototypeMessage(event)">
+              <textarea id="composer-input" aria-label="发送消息" placeholder="给 Agent 发消息，或输入 / 命令"></textarea>
+              <div class="composer-row">
+                <button type="button" class="icon-button" aria-label="添加附件" onclick="showToast('toast-chat', '附件选择器已打开')"><i data-lucide="plus" width="15"></i></button>
+                <button type="button" class="model-chip" onclick="showToast('toast-chat', '模型：GPT-5.2 Codex')">GPT-5.2 Codex</button>
+                <button type="button" class="model-chip" onclick="showToast('toast-chat', '权限：工作区写入')">工作区写入</button>
+                <button type="submit" class="send-button" aria-label="发送"><i data-lucide="arrow-up" width="16"></i></button>
+              </div>
+            </form>
+            <div id="toast-chat" class="toast" role="status"></div>
+            <div id="memory-sheet-layer" class="sheet-layer" onclick="closeMemorySheet(event)">
+              <section class="memory-sheet" role="dialog" aria-modal="true" aria-labelledby="memory-sheet-title" onclick="event.stopPropagation()">
+                <div class="sheet-grabber"></div>
+                <div class="sheet-head">
+                  <i data-lucide="pencil-line" width="17"></i>
+                  <div class="sheet-title"><strong id="memory-sheet-title">编辑历史记忆</strong><span>用户消息 · 第 18 条 · 影响后续上下文</span></div>
+                  <button class="icon-button" aria-label="关闭" onclick="closeMemorySheet()"><i data-lucide="x" width="17"></i></button>
+                </div>
+                <div class="sheet-field-label"><label for="mobile-revision-editor">消息内容</label><span>revision 18</span></div>
+                <textarea id="mobile-revision-editor">把移动端做成真正的会话工作台：能切换多个 Agent、查看工具调用，也能在手机上继续输入。</textarea>
+                <div class="sheet-warning"><i data-lucide="shield-check" width="14"></i><span>保存时校验版本；发生冲突会先让你确认，不会覆盖桌面端的新修改。</span></div>
+                <div class="sheet-actions">
+                  <button class="sheet-icon-action" aria-label="在此消息后注入" onclick="showToast('toast-chat', '将在此消息后注入新记忆')"><i data-lucide="between-horizontal-start" width="16"></i></button>
+                  <button class="sheet-icon-action danger" aria-label="擦除消息" onclick="showToast('toast-chat', '擦除前需要再次确认')"><i data-lucide="eraser" width="16"></i></button>
+                  <button class="sheet-save" onclick="saveMobileRevision()"><i data-lucide="check" width="15"></i>保存新修订</button>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- Screen 3: focused memory audit surface -->
+      <article class="phone-group">
+        <p class="phone-label">03 · Memory / 历史修改与恢复</p>
+        <div class="phone-frame">
+          <div class="dynamic-island"></div>
+          <div class="statusbar"><span>10:26</span><span class="status-icons"><i data-lucide="signal" width="11"></i><i data-lucide="wifi" width="11"></i><i data-lucide="battery-medium" width="12"></i></span></div>
+          <div class="screen">
+            <header class="appbar">
+              <button class="icon-button" aria-label="返回会话" onclick="showToast('toast-tools', '返回 Agent 会话')"><i data-lucide="chevron-left" width="18"></i></button>
+              <div class="appbar-title"><strong>记忆审计</strong><span>Memory Forge 远程工作台</span></div>
+              <button class="icon-button" aria-label="刷新" onclick="showToast('toast-tools', '已与主机同步')"><i data-lucide="refresh-cw" width="16"></i></button>
+            </header>
+
+            <div class="audit-context"><i data-lucide="file-clock" width="15"></i><div><strong>所有历史修改都在这里</strong><span>查看前后差异、定位原消息或恢复旧版本</span></div></div>
+
+            <div class="scroll">
+              <section id="panel-memory" class="panel active" role="tabpanel">
+                <div class="audit-summary"><div class="audit-number">2</div><div><strong>本次会话修改</strong><span>所有改动均写入审计日志</span></div></div>
+                <article class="audit-item">
+                  <div class="audit-head"><i data-lucide="pencil-line" width="13" color="var(--warning)"></i><strong>用户消息 · 第 18 条</strong><time>2 分钟前</time></div>
+                  <div class="diff"><div class="diff-line old">− 手机端保持只读，避免写入风险。</div><div class="diff-line new">+ 手机端允许审计写入，并使用 revision 防止覆盖。</div></div>
+                  <div class="audit-actions"><button class="action" onclick="openMemorySheet()">再次编辑</button><button class="action" onclick="showToast('toast-tools', '已复制修改内容')">复制</button><button class="action primary" onclick="showToast('toast-tools', '消息已恢复到修改前')">恢复</button></div>
+                </article>
+                <article class="audit-item">
+                  <div class="audit-head"><i data-lucide="eraser" width="13" color="var(--danger)"></i><strong>助手消息 · 第 21 条</strong><time>9 分钟前</time></div>
+                  <div class="diff"><div class="diff-line old">− 一段与当前方案无关的调试输出。</div><div class="diff-line new">+ 已擦除，后续上下文不再读取。</div></div>
+                  <div class="audit-actions"><button class="action primary" onclick="showToast('toast-tools', '已恢复被擦除的消息')">恢复</button></div>
+                </article>
+              </section>
+            </div>
+            <div id="toast-tools" class="toast" role="status"></div>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    lucide.createIcons();
+
+    function showToast(id, message) {
+      const toast = document.getElementById(id);
+      toast.textContent = message;
+      toast.classList.add('show');
+      window.clearTimeout(toast._timer);
+      toast._timer = window.setTimeout(() => toast.classList.remove('show'), 1800);
+    }
+
+    function toggleSwitcher(button) {
+      const menu = document.getElementById('switcher-menu');
+      const open = menu.classList.toggle('open');
+      button.setAttribute('aria-expanded', String(open));
+    }
+
+    function chooseSession(label) {
+      document.querySelector('.session-switcher span').textContent = label;
+      document.getElementById('switcher-menu').classList.remove('open');
+      showToast('toast-chat', `已切换：${label}`);
+    }
+
+    function sendPrototypeMessage(event) {
+      event.preventDefault();
+      const input = document.getElementById('composer-input');
+      const value = input.value.trim();
+      if (!value) {
+        showToast('toast-chat', '先输入一条消息');
+        return;
+      }
+      const turn = document.createElement('div');
+      turn.className = 'turn user-turn';
+      turn.innerHTML = `<div class="turn-role">你 · 刚刚</div><div class="turn-body"></div>`;
+      turn.querySelector('.turn-body').textContent = value;
+      document.getElementById('chat-scroll').appendChild(turn);
+      input.value = '';
+      turn.scrollIntoView({ behavior: 'smooth' });
+      showToast('toast-chat', '消息已发送到主机');
+    }
+
+    function showToolPanel(name, button) {
+      document.querySelectorAll('.panel').forEach((panel) => panel.classList.remove('active'));
+      document.querySelectorAll('.segment').forEach((segment) => {
+        segment.classList.remove('active');
+        segment.setAttribute('aria-selected', 'false');
+      });
+      document.getElementById(`panel-${name}`).classList.add('active');
+      button.classList.add('active');
+      button.setAttribute('aria-selected', 'true');
+    }
+
+    function openMemorySheet() {
+      document.getElementById('memory-sheet-layer').classList.add('open');
+      window.setTimeout(() => document.getElementById('mobile-revision-editor').focus(), 0);
+    }
+
+    function closeMemorySheet(event) {
+      if (event && event.target !== event.currentTarget) return;
+      document.getElementById('memory-sheet-layer').classList.remove('open');
+    }
+
+    function saveMobileRevision() {
+      closeMemorySheet();
+      showToast('toast-chat', 'revision 19 已同步到主机');
+    }
+  </script>
+</body>
+</html>

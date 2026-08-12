@@ -257,7 +257,7 @@ impl PlatformAdapter for KiroPlatform {
         let lines = self.read_jsonl(&jsonl_path);
         let blocks = self.blocks(&lines, session_key);
 
-        Ok(SessionDetail {
+        Ok(crate::platforms::with_session_capabilities(SessionDetail {
             platform: "kiro".to_string(),
             session_key: session_key.to_string(),
             session_id: session_key.to_string(),
@@ -265,9 +265,10 @@ impl PlatformAdapter for KiroPlatform {
             alias_title: alias,
             cwd,
             commands: build_commands("kiro", session_key),
+            capabilities: Default::default(),
             revision: String::new(),
             blocks,
-        })
+        }))
     }
 
     fn update_message(&self, edit_target: &str, new_content: &str) -> Result<String, String> {

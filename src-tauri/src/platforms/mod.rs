@@ -75,6 +75,73 @@ pub struct TimelineBlock {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionCapabilities {
+    pub edit: bool,
+    pub erase: bool,
+    pub restore: bool,
+    pub resume: bool,
+    pub fork: bool,
+    pub raw_terminal: bool,
+    pub live_structured_events: bool,
+}
+
+impl Default for SessionCapabilities {
+    fn default() -> Self {
+        Self {
+            edit: false,
+            erase: false,
+            restore: false,
+            resume: false,
+            fork: false,
+            raw_terminal: false,
+            live_structured_events: false,
+        }
+    }
+}
+
+impl SessionCapabilities {
+    pub fn from_snapshot(
+        platform: &str,
+        commands: &HashMap<String, String>,
+        has_editable_blocks: bool,
+    ) -> Self {
+        let resume = commands.contains_key("resume");
+        let fork = commands.contains_key("fork");
+        Self {
+            edit: has_editable_blocks,
+            erase: has_editable_blocks,
+            restore: has_editable_blocks,
+            resume,
+            fork,
+            raw_terminal: platform != "kiro-ide" && (resume || fork),
+            live_structured_events: false,
+        }
+    }
+
+    pub fn disable_mutations(&mut self) {
+        self.edit = false;
+        self.erase = false;
+        self.restore = false;
+    }
+
+    pub fn disable_terminal(&mut self) {
+        self.resume = false;
+        self.fork = false;
+        self.raw_terminal = false;
+    }
+}
+
+pub fn with_session_capabilities(mut detail: SessionDetail) -> SessionDetail {
+    detail.capabilities = SessionCapabilities::from_snapshot(
+        &detail.platform,
+        &detail.commands,
+        detail.blocks.iter().any(|block| block.editable),
+    );
+    detail
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionDetail {
     pub platform: String,
     pub session_key: String,
@@ -83,6 +150,7 @@ pub struct SessionDetail {
     pub alias_title: String,
     pub cwd: String,
     pub commands: HashMap<String, String>,
+    pub capabilities: SessionCapabilities,
     pub revision: String,
     pub blocks: Vec<TimelineBlock>,
 }
@@ -371,61 +439,87 @@ pub fn get_adapter(
     }
 }
 
+const MAX_TERMINAL_SESSION_ID_BYTES: usize = 512;
+
+fn is_safe_terminal_session_id(session_id: &str) -> bool {
+    !session_id.is_empty()
+        && session_id.len() <= MAX_TERMINAL_SESSION_ID_BYTES
+        && !session_id.starts_with('-')
+        && session_id.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'-' | b'_' | b'.' | b':' | b'@' | b'+' | b'=' | b',')
+        })
+}
+
+pub fn build_terminal_command(
+    platform: &str,
+    session_id: &str,
+    command_kind: &str,
+) -> Option<String> {
+    if !is_safe_terminal_session_id(session_id) {
+        return None;
+    }
+
+    match (platform, command_kind) {
+        ("claude", "resume") => Some(format!("claude --resume {session_id}")),
+        ("claude", "fork") => Some(format!("claude --resume {session_id} --fork-session")),
+        ("codex", "resume") => Some(format!("codex resume {session_id}")),
+        ("opencode", "resume") => Some(format!("opencode -s {session_id}")),
+        ("opencode", "fork") => Some(format!("opencode -s {session_id} --fork")),
+        ("kiro", "resume") => Some(format!("kiro-cli chat --resume-id {session_id}")),
+        ("gemini", "resume") => Some(format!("gemini --resume {session_id}")),
+        ("grok", "resume") => Some(format!("grok --resume {session_id}")),
+        ("grok", "fork") => Some(format!("grok --resume {session_id} --fork-session")),
+        ("pi", "resume") => Some(format!("pi --session {session_id}")),
+        _ => None,
+    }
+}
+
 pub fn build_commands(platform: &str, session_id: &str) -> HashMap<String, String> {
-    match platform {
-        "claude" => {
-            let mut m = HashMap::new();
-            m.insert("resume".into(), format!("claude --resume {session_id}"));
-            m.insert(
-                "fork".into(),
-                format!("claude --resume {session_id} --fork-session"),
+    ["resume", "fork"]
+        .into_iter()
+        .filter_map(|command_kind| {
+            build_terminal_command(platform, session_id, command_kind)
+                .map(|command| (command_kind.to_string(), command))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_commands_are_canonical_for_supported_platforms() {
+        assert_eq!(
+            build_terminal_command("claude", "session-123", "fork").as_deref(),
+            Some("claude --resume session-123 --fork-session")
+        );
+        assert_eq!(
+            build_terminal_command("gemini", "session_123", "resume").as_deref(),
+            Some("gemini --resume session_123")
+        );
+        assert!(build_terminal_command("codex", "session-123", "fork").is_none());
+        assert!(build_terminal_command("unknown", "session-123", "resume").is_none());
+    }
+
+    #[test]
+    fn terminal_commands_reject_shell_and_option_injection_ids() {
+        for session_id in [
+            "session;whoami",
+            "session && whoami",
+            "session|whoami",
+            "session$(whoami)",
+            "session`whoami`",
+            "session%PATH%",
+            "session\nwhoami",
+            "--dangerous-option",
+        ] {
+            assert!(
+                build_terminal_command("claude", session_id, "resume").is_none(),
+                "unsafe session id was accepted: {session_id:?}"
             );
-            m
-        }
-        "codex" => {
-            let mut m = HashMap::new();
-            m.insert("resume".into(), format!("codex resume {session_id}"));
-            m
-        }
-        "cursor" => HashMap::new(),
-        "opencode" => {
-            let mut m = HashMap::new();
-            m.insert("resume".into(), format!("opencode -s {session_id}"));
-            m.insert("fork".into(), format!("opencode -s {session_id} --fork"));
-            m
-        }
-        "kiro" => {
-            let mut m = HashMap::new();
-            m.insert(
-                "resume".into(),
-                format!("kiro-cli chat --resume-id {session_id}"),
-            );
-            m
-        }
-        "kiro-ide" => HashMap::new(),
-        "gemini" => {
-            let mut m = HashMap::new();
-            m.insert("resume".into(), format!("gemini --resume '{session_id}'"));
-            m
-        }
-        "grok" => {
-            let mut m = HashMap::new();
-            m.insert("resume".into(), format!("grok --resume {session_id}"));
-            m.insert(
-                "fork".into(),
-                format!("grok --resume {session_id} --fork-session"),
-            );
-            m
-        }
-        "pi" => {
-            let mut m = HashMap::new();
-            m.insert("resume".into(), format!("pi --session {session_id}"));
-            m
-        }
-        _ => {
-            let mut m = HashMap::new();
-            m.insert("session".into(), session_id.into());
-            m
+            assert!(build_commands("claude", session_id).is_empty());
         }
     }
 }

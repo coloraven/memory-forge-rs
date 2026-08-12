@@ -446,7 +446,7 @@ impl PlatformAdapter for GrokPlatform {
         let blocks = Self::blocks_for_entries(&entries, session_key);
         let alias_title = alias_map.get(session_key).cloned().unwrap_or_default();
         let title = Self::session_title(&summary, &alias_title);
-        Ok(SessionDetail {
+        Ok(crate::platforms::with_session_capabilities(SessionDetail {
             platform: "grok".to_string(),
             session_key: session_key.to_string(),
             session_id: summary.session_id.clone(),
@@ -454,9 +454,10 @@ impl PlatformAdapter for GrokPlatform {
             alias_title,
             cwd: summary.cwd,
             commands: build_commands("grok", &summary.session_id),
+            capabilities: Default::default(),
             revision: String::new(),
             blocks,
-        })
+        }))
     }
 
     fn update_message(&self, edit_target: &str, new_content: &str) -> Result<String, String> {
@@ -903,6 +904,13 @@ mod tests {
             detail.commands.get("resume").map(String::as_str),
             Some("grok --resume 019f-test-session")
         );
+        assert!(detail.capabilities.edit);
+        assert!(detail.capabilities.erase);
+        assert!(detail.capabilities.restore);
+        assert!(detail.capabilities.resume);
+        assert!(detail.capabilities.fork);
+        assert!(detail.capabilities.raw_terminal);
+        assert!(!detail.capabilities.live_structured_events);
 
         let old = adapter
             .update_message(&format!("{key}::2::content"), "Please fix it now")

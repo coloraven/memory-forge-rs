@@ -103,50 +103,67 @@ export function SessionList() {
 
   useEffect(() => {
     if (currentPlatform === 'dashboard' || currentPlatform === 'about' || currentPlatform === 'prompts' || currentPlatform === 'settings') return
+    let cancelled = false
     const loadSessions = async () => {
       setLoading(true)
       try {
         const isSearch = searchQuery.trim().length > 0
-        console.time(`[perf] getSessions(${currentPlatform}, search=${isSearch})`)
         const result = await api.getSessions(currentPlatform, searchQuery, isSearch ? undefined : PAGE_SIZE, 0, showArchived)
-        console.timeEnd(`[perf] getSessions(${currentPlatform}, search=${isSearch})`)
+        if (cancelled) return
         dispatch({ type: 'setSessions', payload: result.items })
         setTotalCount(result.total)
         dispatch({ type: 'setEditingBlock', payload: null })
         dispatch({ type: 'setSessionStatus', payload: null })
       } catch (err) {
+        if (cancelled) return
         console.error('Failed to load sessions:', err)
         dispatch({ type: 'setSessions', payload: [] })
         setTotalCount(0)
         dispatch({ type: 'setSessionStatus', payload: { tone: 'error', message: t('session.refreshFailed') } })
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
     loadSessions()
+    return () => {
+      cancelled = true
+    }
   }, [currentPlatform, searchQuery, showArchived])
 
   useEffect(() => {
     if (!selectedSessionKey || currentPlatform === 'dashboard' || currentPlatform === 'about' || currentPlatform === 'prompts' || currentPlatform === 'settings') return
+    let cancelled = false
     const loadDetail = async () => {
       try {
-        console.time(`[perf] getSessionDetail(${currentPlatform})`)
         const detail = await api.getSessionDetail(currentPlatform, selectedSessionKey)
-        console.timeEnd(`[perf] getSessionDetail(${currentPlatform})`)
+        if (cancelled) return
         dispatch({ type: 'setSessionDetail', payload: detail })
         if (isRemote || state.showEditLog) {
-          api.getEditLog(currentPlatform, selectedSessionKey).then(logs => dispatch({ type: 'setEditLog', payload: logs })).catch(console.error)
+          api.getEditLog(currentPlatform, selectedSessionKey)
+            .then(logs => {
+              if (!cancelled) {
+                dispatch({
+                  type: 'setEditLogForSession',
+                  payload: { platform: currentPlatform, sessionKey: selectedSessionKey, editLog: logs },
+                })
+              }
+            })
+            .catch(console.error)
         }
         dispatch({
           type: 'updateSession',
           payload: { sessionKey: selectedSessionKey, updates: { displayTitle: detail.aliasTitle || detail.title, aliasTitle: detail.aliasTitle } }
         })
       } catch (err) {
+        if (cancelled) return
         console.error('Failed to load session detail:', err)
       }
     }
     loadDetail()
-  }, [selectedSessionKey, currentPlatform])
+    return () => {
+      cancelled = true
+    }
+  }, [selectedSessionKey, currentPlatform, isRemote, state.showEditLog])
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -262,11 +279,9 @@ export function SessionList() {
 
   const handleCardClick = (session: Session, index: number, e: React.MouseEvent) => {
     if (!selectionMode) {
-      if (isRemote) {
-        const nextSearchParams = new URLSearchParams(remoteSearchParams)
-        nextSearchParams.set('session', session.sessionKey)
-        setRemoteSearchParams(nextSearchParams)
-      }
+      const nextSearchParams = new URLSearchParams(remoteSearchParams)
+      nextSearchParams.set('session', session.sessionKey)
+      setRemoteSearchParams(nextSearchParams)
       dispatch({ type: 'setSelectedSessionKey', payload: session.sessionKey })
       dispatch({ type: 'setEditingBlock', payload: null })
       return
@@ -395,7 +410,7 @@ export function SessionList() {
             <input
               type="search"
               placeholder={t('session.search')}
-              defaultValue={searchQuery}
+              value={searchQuery}
               onChange={(event) => debouncedSetSearch(event.target.value)}
             />
           </label>
@@ -533,7 +548,7 @@ export function SessionList() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/50" />
           <Input
             placeholder={t('session.search')}
-            defaultValue={searchQuery}
+            value={searchQuery}
             onChange={(e) => debouncedSetSearch(e.target.value)}
             className="pl-10 bg-muted/20 border-border/40 hover:border-border/80 focus-visible:ring-1 focus-visible:ring-primary/40 focus-visible:border-primary/40 rounded-xl transition-all"
           />

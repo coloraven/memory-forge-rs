@@ -9,7 +9,11 @@ import {
   type ReactNode,
 } from "react";
 import { getThemeSpec } from "@/features/desktop/catalog";
-import { loadDesktopSnapshot, updateDesktopSettings } from "@/features/desktop/api";
+import { api, loadDesktopSnapshot, updateDesktopSettings } from "@/features/desktop/api";
+import {
+  appReducer,
+  createInitialAppState,
+} from "@/features/desktop/app-reducer";
 import { translate, type MessageKey } from "@/features/desktop/i18n";
 import type {
   AppAction,
@@ -20,70 +24,9 @@ import type {
   ThemeId,
 } from "@/features/desktop/types";
 import type { RemoteCapabilities } from "@/features/remote/protocol";
+import { persistWorkspaceState } from "@/features/workspace/persistence";
 
-const initialAppState: AppState = {
-  currentPlatform: "dashboard",
-  sessions: [],
-  selectedSessionKey: null,
-  sessionDetail: null,
-  dashboard: null,
-  roleFilter: "all",
-  searchQuery: "",
-  editingBlock: null,
-  editLog: [],
-  showEditLog: false,
-  sessionStatus: null,
-  mobileSidebarOpen: false,
-  showArchived: false,
-};
-
-function appReducer(state: AppState, action: AppAction): AppState {
-  switch (action.type) {
-    case "setCurrentPlatform":
-      return {
-        ...state,
-        currentPlatform: action.payload,
-        selectedSessionKey: null,
-        sessionDetail: null,
-        editLog: [],
-        showEditLog: false,
-        sessionStatus: null,
-      };
-    case "setSessions":
-      return { ...state, sessions: action.payload };
-    case "updateSession":
-      return {
-        ...state,
-        sessions: state.sessions.map((s) =>
-          s.sessionKey === action.payload.sessionKey ? { ...s, ...action.payload.updates } : s
-        ),
-      };
-    case "setSelectedSessionKey":
-      return { ...state, selectedSessionKey: action.payload, sessionStatus: null };
-    case "setSessionDetail":
-      return { ...state, sessionDetail: action.payload };
-    case "setDashboard":
-      return { ...state, dashboard: action.payload };
-    case "setRoleFilter":
-      return { ...state, roleFilter: action.payload };
-    case "setSearchQuery":
-      return { ...state, searchQuery: action.payload };
-    case "setEditingBlock":
-      return { ...state, editingBlock: action.payload };
-    case "setEditLog":
-      return { ...state, editLog: action.payload };
-    case "setShowEditLog":
-      return { ...state, showEditLog: action.payload };
-    case "setSessionStatus":
-      return { ...state, sessionStatus: action.payload };
-    case "setMobileSidebarOpen":
-      return { ...state, mobileSidebarOpen: action.payload };
-    case "setShowArchived":
-      return { ...state, showArchived: action.payload, selectedSessionKey: null, sessionDetail: null };
-    default:
-      return state;
-  }
-}
+const ACTIVE_SESSION_REFRESH_INTERVAL_MS = 8_000;
 
 type DesktopContextValue = {
   snapshot: DesktopSnapshot | null;
@@ -116,7 +59,7 @@ export function DesktopProvider({ children }: { children: ReactNode }) {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [state, dispatch] = useReducer(appReducer, initialAppState);
+  const [state, dispatch] = useReducer(appReducer, undefined, createInitialAppState);
   const noticeTimerRef = useRef<number | null>(null);
 
   const locale = snapshot?.settings.locale ?? "zh-CN";
@@ -138,12 +81,85 @@ export function DesktopProvider({ children }: { children: ReactNode }) {
   const remoteCapabilities = remoteBootstrap?.capabilities ?? null;
   const isRemote = snapshot?.runtime === "remote-web";
   const isReadOnlyRemote = isRemote && remoteCapabilities?.sessionEdit !== true;
+  const activeWorkspaceTab = state.workspace.openTabs.find(
+    (tab) => tab.id === state.workspace.activeTabId
+  );
+  const editingActiveSession = Boolean(
+    state.editingBlock &&
+      activeWorkspaceTab &&
+      state.editingBlock.platform === activeWorkspaceTab.platform &&
+      state.editingBlock.sessionKey === activeWorkspaceTab.sessionKey
+  );
 
   useEffect(() => {
     return () => {
       if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    persistWorkspaceState(state.workspace);
+  }, [state.workspace]);
+
+  useEffect(() => {
+    if (!snapshot || !activeWorkspaceTab || editingActiveSession) return;
+
+    let cancelled = false;
+    let inFlight = false;
+    const initialDetail =
+      state.workspace.viewByTabId[activeWorkspaceTab.id]?.detail ?? null;
+    let knownSignature = initialDetail
+      ? `${initialDetail.revision}:${JSON.stringify(initialDetail.capabilities ?? null)}`
+      : null;
+
+    const refreshActiveSession = async () => {
+      if (cancelled || inFlight || document.visibilityState !== "visible") return;
+      inFlight = true;
+      try {
+        const detail = await api.getSessionDetail(
+          activeWorkspaceTab.platform,
+          activeWorkspaceTab.sessionKey
+        );
+        if (cancelled) return;
+        const nextSignature = `${detail.revision}:${JSON.stringify(detail.capabilities ?? null)}`;
+        if (nextSignature !== knownSignature) {
+          knownSignature = nextSignature;
+          dispatch({ type: "setSessionDetail", payload: detail });
+        }
+      } catch {
+        // Passive refresh failures leave the last authoritative snapshot visible.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === "visible") {
+        void refreshActiveSession();
+      }
+    };
+    const interval = window.setInterval(
+      () => void refreshActiveSession(),
+      ACTIVE_SESSION_REFRESH_INTERVAL_MS
+    );
+    document.addEventListener("visibilitychange", handleVisibilityOrFocus);
+    window.addEventListener("focus", handleVisibilityOrFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
+      window.removeEventListener("focus", handleVisibilityOrFocus);
+    };
+  }, [
+    activeWorkspaceTab?.id,
+    activeWorkspaceTab?.platform,
+    activeWorkspaceTab?.sessionKey,
+    editingActiveSession,
+    remoteCapabilities?.sessionEdit,
+    remoteCapabilities?.terminal,
+    snapshot?.runtime,
+  ]);
 
   useEffect(() => {
     if (typeof document === "undefined" || !snapshot) return;

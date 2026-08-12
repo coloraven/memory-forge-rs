@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "test:remote": "node scripts/remote-smoke.mjs",
+    "test:workspace": "node --test src/features/workspace/*.test.mjs",
     "tauri": "tauri",
     "check": "ultracite check",
     "fix": "ultracite fix",

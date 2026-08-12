@@ -27,6 +27,7 @@ use crate::embedded_terminal::{
     EmbeddedTerminalState, RemoteTerminalOutput, RemoteTerminalSnapshot,
     StartEmbeddedTerminalRequest,
 };
+use crate::platforms::build_terminal_command;
 use crate::remote_protocol::{
     ApiError, ApiSuccess, EditMessageMutation, RemoteAuthInfo, RemoteBootstrap, RemoteCapabilities,
     RemotePlatformInfo, RemoteTerminalInputRequest, RemoteTerminalResizeRequest,
@@ -763,6 +764,8 @@ async fn session_detail(
     let request_id = request_id(&headers);
     let mutation_supported =
         state.context.mutation_enabled && remote_mutations_supported(&query.platform);
+    let terminal_supported =
+        state.context.terminal_enabled && query.platform != REMOTE_MUTATION_UNSUPPORTED_PLATFORM;
     let mut result = run_snapshot(state, move |db, settings| {
         ensure_known_session(settings, &query.platform, &query.session_key)?;
         session_service::session_detail(db, settings, &query.platform, &query.session_key)
@@ -773,6 +776,10 @@ async fn session_detail(
         for block in &mut result.blocks {
             block.editable = false;
         }
+        result.capabilities.disable_mutations();
+    }
+    if !terminal_supported {
+        result.capabilities.disable_terminal();
     }
     Ok(Json(ApiSuccess::new(request_id, result)))
 }
@@ -838,11 +845,12 @@ async fn terminal_start(
     })
     .await
     .map_err(|error| service_error(&request_id, error))?;
-    let command = detail
+    let advertised_command = detail
         .commands
         .get(&command_kind)
-        .cloned()
-        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !value.trim().is_empty());
+    let command = build_terminal_command(&detail.platform, &detail.session_id, &command_kind)
+        .filter(|approved| advertised_command.is_some_and(|advertised| advertised == approved))
         .ok_or_else(|| {
             invalid_request_error(
                 &request_id,
@@ -1682,19 +1690,60 @@ fn format_http_url(address: SocketAddr) -> String {
 }
 
 fn discover_lan_urls(port: u16) -> Vec<String> {
-    let mut urls = Vec::new();
+    let preferred_address = default_route_address();
+    let interface_addresses = if_addrs::get_if_addrs()
+        .map(|interfaces| {
+            interfaces
+                .into_iter()
+                .filter(|interface| interface.is_oper_up())
+                .map(|interface| interface.ip())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    lan_urls_from_addresses(port, preferred_address, interface_addresses)
+}
+
+fn default_route_address() -> Option<IpAddr> {
     if let Ok(socket) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)) {
-        if socket.connect((Ipv4Addr::new(8, 8, 8, 8), 80)).is_ok() {
+        if socket.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).is_ok() {
             if let Ok(address) = socket.local_addr() {
-                if !address.ip().is_loopback() && !address.ip().is_unspecified() {
-                    urls.push(format_http_url(SocketAddr::new(address.ip(), port)));
-                }
+                return Some(address.ip());
             }
         }
     }
-    urls.sort();
-    urls.dedup();
-    urls
+    None
+}
+
+fn lan_urls_from_addresses(
+    port: u16,
+    preferred_address: Option<IpAddr>,
+    addresses: impl IntoIterator<Item = IpAddr>,
+) -> Vec<String> {
+    let mut addresses = addresses
+        .into_iter()
+        .chain(preferred_address)
+        .filter(|address| is_lan_url_address(*address))
+        .collect::<Vec<_>>();
+    addresses.sort_by_key(|address| {
+        (
+            Some(*address) != preferred_address,
+            matches!(address, IpAddr::V4(ip) if ip.is_link_local()),
+            address.to_string(),
+        )
+    });
+    addresses.dedup();
+
+    addresses
+        .into_iter()
+        .map(|address| format_http_url(SocketAddr::new(address, port)))
+        .collect()
+}
+
+fn is_lan_url_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+        IpAddr::V6(ip) => ip.is_unique_local(),
+    }
 }
 
 fn record_server_exit(status: &Mutex<RemoteServerStatus>, error: Option<String>) {
@@ -1710,6 +1759,34 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::Duration;
+
+    #[test]
+    fn lan_url_discovery_prefers_default_route_and_filters_unsafe_addresses() {
+        let urls = lan_urls_from_addresses(
+            7331,
+            Some(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 22))),
+            [
+                IpAddr::V4(Ipv4Addr::new(192, 168, 80, 1)),
+                IpAddr::V4(Ipv4Addr::new(172, 19, 144, 1)),
+                IpAddr::V4(Ipv4Addr::new(169, 254, 227, 125)),
+                IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                "fd00::1".parse().expect("unique-local IPv6 address"),
+                IpAddr::V4(Ipv4Addr::new(192, 168, 31, 22)),
+            ],
+        );
+
+        assert_eq!(
+            urls,
+            vec![
+                "http://192.168.31.22:7331",
+                "http://172.19.144.1:7331",
+                "http://192.168.80.1:7331",
+                "http://[fd00::1]:7331",
+                "http://169.254.227.125:7331",
+            ]
+        );
+    }
 
     struct TestDir(PathBuf);
 
@@ -2025,6 +2102,14 @@ mod tests {
             .expect("detail json");
         assert_eq!(detail["data"]["blocks"][0]["content"], "hello remotely");
         assert_eq!(detail["data"]["blocks"][0]["editable"], false);
+        assert_eq!(detail["data"]["capabilities"]["edit"], false);
+        assert_eq!(detail["data"]["capabilities"]["erase"], false);
+        assert_eq!(detail["data"]["capabilities"]["restore"], false);
+        assert_eq!(detail["data"]["capabilities"]["rawTerminal"], false);
+        assert_eq!(
+            detail["data"]["capabilities"]["liveStructuredEvents"],
+            false
+        );
         assert_eq!(
             detail["data"]["revision"]
                 .as_str()
@@ -2306,6 +2391,10 @@ mod tests {
             .json()
             .expect("detail json");
         assert_eq!(detail["data"]["blocks"][0]["editable"], true);
+        assert_eq!(detail["data"]["capabilities"]["edit"], true);
+        assert_eq!(detail["data"]["capabilities"]["erase"], true);
+        assert_eq!(detail["data"]["capabilities"]["restore"], true);
+        assert_eq!(detail["data"]["capabilities"]["rawTerminal"], false);
         let revision = detail["data"]["revision"]
             .as_str()
             .expect("revision")

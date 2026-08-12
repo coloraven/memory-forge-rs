@@ -88,6 +88,26 @@ function getDefaultTerminal() {
   return "cmd";
 }
 
+function getRemoteUrlOptions(status: RemoteServerStatus | null) {
+  if (status?.lanUrls?.length) {
+    return status.lanUrls;
+  }
+  if (status?.url) {
+    return [status.url];
+  }
+  return [];
+}
+
+function getRemotePhoneLink(baseUrl: string, status: RemoteServerStatus | null) {
+  if (!baseUrl) {
+    return "";
+  }
+  if (status?.accessToken) {
+    return `${baseUrl}/#token=${encodeURIComponent(status.accessToken)}`;
+  }
+  return baseUrl;
+}
+
 export default function SettingsPage() {
   const {
     snapshot,
@@ -109,6 +129,7 @@ export default function SettingsPage() {
   const [remoteLinkCopied, setRemoteLinkCopied] = useState(false);
   const [remoteQrOpen, setRemoteQrOpen] = useState(false);
   const [remotePortDraft, setRemotePortDraft] = useState("7331");
+  const [preferredRemoteUrl, setPreferredRemoteUrl] = useState("");
 
   useEffect(() => {
     if (!snapshot || snapshot.runtime !== "tauri") return;
@@ -148,12 +169,11 @@ export default function SettingsPage() {
     }),
     ...PLATFORM_ITEMS.filter(({ id }) => !navigationItems.includes(id)),
   ];
-  const remoteBaseUrl = remoteStatus?.lanUrls?.[0] ?? remoteStatus?.url ?? "";
-  const remotePhoneLink = remoteBaseUrl
-    ? remoteStatus?.accessToken
-      ? `${remoteBaseUrl}/#token=${encodeURIComponent(remoteStatus.accessToken)}`
-      : remoteBaseUrl
-    : "";
+  const remoteUrlOptions = getRemoteUrlOptions(remoteStatus);
+  const remoteBaseUrl = remoteUrlOptions.includes(preferredRemoteUrl)
+    ? preferredRemoteUrl
+    : remoteUrlOptions[0] ?? "";
+  const remotePhoneLink = getRemotePhoneLink(remoteBaseUrl, remoteStatus);
 
   const applyRemoteSettings = async (
     patch: Parameters<typeof updateSettings>[0]
@@ -389,9 +409,26 @@ export default function SettingsPage() {
                   <span className={cn("size-2.5 shrink-0 rounded-full", remoteStatus?.running ? "bg-emerald-500" : "bg-red-400")} />
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-foreground">{t(remoteStatus?.running ? "remoteRunning" : "remoteStopped")}</p>
-                    <p className="mt-0.5 truncate font-mono text-[11px] text-quiet" title={remoteBaseUrl || remoteStatus?.error || undefined}>
-                      {remoteBaseUrl || remoteStatus?.error || "-"}
-                    </p>
+                    {remoteUrlOptions.length > 1 ? (
+                      <select
+                        aria-label={t("remoteAddress")}
+                        className="mt-1 h-8 max-w-full rounded-lg border border-border/60 bg-background/60 px-2 font-mono text-[11px] text-quiet focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        onChange={(event) => {
+                          setPreferredRemoteUrl(event.target.value);
+                          setRemoteLinkCopied(false);
+                        }}
+                        title={t("remoteAddress")}
+                        value={remoteBaseUrl}
+                      >
+                        {remoteUrlOptions.map((url) => (
+                          <option key={url} value={url}>{url}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <p className="mt-0.5 truncate font-mono text-[11px] text-quiet" title={remoteBaseUrl || remoteStatus?.error || undefined}>
+                        {remoteBaseUrl || remoteStatus?.error || "-"}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">

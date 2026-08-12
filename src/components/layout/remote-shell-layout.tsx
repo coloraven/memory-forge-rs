@@ -6,13 +6,16 @@ import {
   Gem,
   KeyRound,
   LoaderCircle,
+  Library,
   Menu,
+  MessagesSquare,
   MousePointer2,
   Orbit,
   Pi,
   Radio,
   ShieldCheck,
   Sparkles,
+  Settings2,
   Terminal,
   SquareTerminal,
   Wifi,
@@ -20,7 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Suspense, useEffect, useMemo, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
+import { NavLink, Outlet, useLocation } from "react-router";
 import { AppLogo } from "@/components/logo";
 import { api, hasRemoteAccessToken, setRemoteAccessToken } from "@/features/desktop/api";
 import type { MessageKey } from "@/features/desktop/i18n";
@@ -43,7 +46,7 @@ const REMOTE_PLATFORMS: RemotePlatformItem[] = [
   { id: "gemini", labelKey: "platformGemini", icon: Gem },
   { id: "grok", labelKey: "platformGrok", icon: Orbit },
   { id: "pi", labelKey: "platformPi", icon: Pi },
-  { id: "terminal-sessions", labelKey: "terminalSessions", icon: SquareTerminal },
+  { id: "terminal-sessions", labelKey: "remoteNavTerminal", icon: SquareTerminal },
 ];
 
 export default function RemoteShellLayout() {
@@ -59,7 +62,6 @@ export default function RemoteShellLayout() {
     dispatch,
   } = useDesktop();
   const location = useLocation();
-  const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [remoteToken, setRemoteToken] = useState("");
   const [remoteAccessReady, setRemoteAccessReady] = useState(false);
@@ -85,18 +87,31 @@ export default function RemoteShellLayout() {
       const item = REMOTE_PLATFORMS.find((candidate) => candidate.id === id);
       return item ? [item] : [];
     });
-  }, [remoteBootstrap?.platforms, snapshot?.settings.navigationItems]);
+  }, [
+    remoteBootstrap?.capabilities.terminal,
+    remoteBootstrap?.platforms,
+    snapshot?.settings.navigationItems,
+  ]);
 
   const activePlatform = visiblePlatforms.find((item) => location.pathname === `/${item.id}`)
     ?? visiblePlatforms.find((item) => item.id === state.currentPlatform)
     ?? visiblePlatforms[0];
-  const hasSelectedSession = Boolean(state.selectedSessionKey);
-
-  useEffect(() => {
-    if (location.pathname === "/" && visiblePlatforms[0]) {
-      navigate(`/${visiblePlatforms[0].id}`, { replace: true });
-    }
-  }, [location.pathname, navigate, visiblePlatforms]);
+  const isPlatformSessionRoute = Boolean(
+    state.selectedSessionKey
+      && visiblePlatforms.some(
+        (item) => item.id !== "terminal-sessions" && location.pathname === `/${item.id}`
+      )
+  );
+  const isMemoryRoute = location.pathname === "/memory";
+  const hasFocusedContent = isPlatformSessionRoute || isMemoryRoute;
+  const bottomNavigation = [
+    { to: "/", labelKey: "remoteNavSessions" as const, icon: MessagesSquare, kind: "sessions" as const },
+    ...(remoteCapabilities?.terminal === true
+      ? [{ to: "/terminal-sessions", labelKey: "remoteNavTerminal" as const, icon: SquareTerminal, kind: "terminal" as const }]
+      : []),
+    { to: "/prompts", labelKey: "prompts" as const, icon: Library, kind: "prompts" as const },
+    { to: "/settings", labelKey: "settings" as const, icon: Settings2, kind: "settings" as const },
+  ];
 
   useEffect(() => {
     setDrawerOpen(false);
@@ -206,7 +221,7 @@ export default function RemoteShellLayout() {
         </div>
       )}
 
-      <header className={cn("remote-topbar lg:hidden", hasSelectedSession && "max-md:hidden")}>
+      <header className={cn("remote-topbar lg:hidden", hasFocusedContent && "remote-topbar-focused max-md:hidden")}>
         <button
           type="button"
           className="remote-icon-button"
@@ -219,8 +234,8 @@ export default function RemoteShellLayout() {
         <div className="remote-topbar-title">
           <AppLogo className="size-6" />
           <div>
-            <span>{activePlatform ? t(activePlatform.labelKey) : t("appName")}</span>
-            <small>{t("remoteSessions")}</small>
+            <span>{location.pathname === "/" ? t("appName") : activePlatform ? t(activePlatform.labelKey) : t("appName")}</span>
+            <small>{location.pathname === "/" ? t("remoteCompanion") : t("remoteSessions")}</small>
           </div>
         </div>
         <span className="remote-online" title={`${t("remoteServer")}: ${remoteBootstrap?.serverName ?? "Memory Forge"}`}>
@@ -238,7 +253,7 @@ export default function RemoteShellLayout() {
         />
       )}
 
-      <div className={cn("remote-layout", hasSelectedSession && "remote-layout-detail")}>
+      <div className={cn("remote-layout", hasFocusedContent && "remote-layout-detail")}>
         <aside className={cn("remote-drawer", drawerOpen && "remote-drawer-open")}>
           <div className="remote-drawer-brand">
             <AppLogo className="size-9" />
@@ -268,6 +283,15 @@ export default function RemoteShellLayout() {
 
           <p className="remote-nav-label">{t("remoteWorkspaces")}</p>
           <nav className="remote-platform-nav" aria-label={t("remoteWorkspaces")}>
+            <NavLink
+              end
+              to="/"
+              className={({ isActive }) => cn("remote-platform-link", isActive && "remote-platform-link-active")}
+            >
+              <MessagesSquare className="size-4" />
+              <span>{t("remoteSessions")}</span>
+              <span className="remote-platform-chevron">›</span>
+            </NavLink>
             {visiblePlatforms.map((item) => {
               const Icon = item.icon;
               return (
@@ -315,6 +339,32 @@ export default function RemoteShellLayout() {
           </Suspense>
         </main>
       </div>
+
+      {contentReady && (
+        <nav className="remote-bottom-nav lg:hidden" aria-label={t("remotePrimaryNavigation")}>
+          {bottomNavigation.map((item) => {
+            const Icon = item.icon;
+            const platformPath = visiblePlatforms.some(
+              (platform) => platform.id !== "terminal-sessions" && location.pathname === `/${platform.id}`
+            );
+            const active = item.kind === "sessions"
+              ? location.pathname === "/" || location.pathname === "/memory" || platformPath
+              : location.pathname === item.to;
+            return (
+              <NavLink
+                key={item.to}
+                end={item.to === "/"}
+                to={item.to}
+                className={cn("remote-bottom-link", active && "remote-bottom-link-active")}
+                aria-current={active ? "page" : undefined}
+              >
+                <Icon className="size-4" />
+                <span>{t(item.labelKey)}</span>
+              </NavLink>
+            );
+          })}
+        </nav>
+      )}
 
       {remoteAccessChecking && <div className="remote-loading-overlay"><RemoteLoading label={t("loading")} /></div>}
     </div>

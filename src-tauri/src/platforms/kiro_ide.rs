@@ -718,7 +718,7 @@ impl PlatformAdapter for KiroIdePlatform {
             t0.elapsed()
         );
 
-        Ok(SessionDetail {
+        Ok(crate::platforms::with_session_capabilities(SessionDetail {
             platform: "kiro-ide".to_string(),
             session_key: session_key.to_string(),
             session_id: session_id.to_string(),
@@ -726,9 +726,10 @@ impl PlatformAdapter for KiroIdePlatform {
             alias_title: alias,
             cwd,
             commands: build_commands("kiro-ide", session_id),
+            capabilities: Default::default(),
             revision: String::new(),
             blocks,
-        })
+        }))
     }
 
     fn update_message(&self, edit_target: &str, new_content: &str) -> Result<String, String> {

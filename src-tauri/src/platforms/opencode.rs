@@ -263,7 +263,7 @@ impl super::PlatformAdapter for OpenCodePlatform {
             alias.clone()
         };
 
-        Ok(SessionDetail {
+        Ok(crate::platforms::with_session_capabilities(SessionDetail {
             platform: "opencode".into(),
             session_key: session_key.to_string(),
             session_id: session_key.to_string(),
@@ -271,9 +271,10 @@ impl super::PlatformAdapter for OpenCodePlatform {
             alias_title: alias,
             cwd: session_cwd,
             commands: build_commands("opencode", session_key),
+            capabilities: Default::default(),
             revision: String::new(),
             blocks,
-        })
+        }))
     }
 
     fn update_message(&self, edit_target: &str, new_content: &str) -> Result<String, String> {

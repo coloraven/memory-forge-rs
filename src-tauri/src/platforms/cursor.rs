@@ -411,7 +411,7 @@ impl PlatformAdapter for CursorPlatform {
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| data.cwd());
 
-        Ok(SessionDetail {
+        Ok(crate::platforms::with_session_capabilities(SessionDetail {
             platform: "cursor".to_string(),
             session_key: session_key.to_string(),
             session_id: session_key.to_string(),
@@ -419,9 +419,10 @@ impl PlatformAdapter for CursorPlatform {
             alias_title: alias,
             cwd,
             commands: build_commands("cursor", session_key),
+            capabilities: Default::default(),
             revision: String::new(),
             blocks,
-        })
+        }))
     }
 
     fn update_message(&self, edit_target: &str, new_content: &str) -> Result<String, String> {

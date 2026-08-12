@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { AppLogo } from "@/components/logo";
 import { useDesktop } from "@/features/desktop/provider";
 import { api, hasRemoteAccessToken } from "@/features/desktop/api";
+import { RemoteCompanionHome } from "@/features/remote/remote-companion-home";
 import { cn } from "@/lib/utils";
 
 const platformMeta = [
@@ -150,6 +151,16 @@ export default function DashboardPage() {
     const platform = platformMeta.find((item) => item.key === platformId);
     return platform ? [platform] : [];
   });
+
+  if (isRemote) {
+    return (
+      <RemoteCompanionHome
+        dashboard={state.dashboard}
+        error={dashboardError}
+        loading={dashboardLoading}
+      />
+    );
+  }
 
   return (
     <div className="flex h-full flex-col overflow-y-auto pr-2 pb-6">

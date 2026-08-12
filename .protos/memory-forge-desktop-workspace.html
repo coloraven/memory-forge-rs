@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Memory Forge Desktop Workspace Prototype</title>
+  <link rel="icon" href="data:," />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Space+Grotesk:wght@500;600&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --canvas: #080c0b;
+      --base: #0f1413;
+      --surface: #151b19;
+      --surface-high: #1c2421;
+      --border: #303a36;
+      --text: #e6ece8;
+      --muted: #8f9d96;
+      --primary: #72d69f;
+      --secondary: #82a9ff;
+      --warning: #e5b868;
+      --danger: #ef817d;
+      --font: "Noto Sans SC", sans-serif;
+      --display: "Space Grotesk", "Noto Sans SC", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--canvas); color: var(--text); font-family: var(--font); letter-spacing: 0; }
+    button, textarea { font: inherit; }
+    button { color: inherit; }
+
+    .proto-banner {
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: #dbe8ff;
+      background: #24487f;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .stage { min-height: calc(100vh - 32px); padding: 22px; display: grid; place-items: center; }
+
+    .desktop {
+      width: min(1460px, calc(100vw - 44px));
+      height: min(868px, calc(100vh - 76px));
+      min-height: 680px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #3b4641;
+      border-radius: 12px;
+      background: var(--base);
+      box-shadow: 0 30px 100px rgb(0 0 0 / 55%);
+      position: relative;
+    }
+
+    .windowbar {
+      height: 42px;
+      flex: 0 0 42px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      border-bottom: 1px solid var(--border);
+      background: #101614;
+    }
+
+    .traffic { display: flex; gap: 7px; }
+    .traffic span { width: 10px; height: 10px; border-radius: 50%; }
+    .traffic span:nth-child(1) { background: #ef6f67; }
+    .traffic span:nth-child(2) { background: #e9bd62; }
+    .traffic span:nth-child(3) { background: #63c987; }
+
+    .window-brand {
+      min-width: 0;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .brand-mark {
+      width: 25px;
+      height: 25px;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      color: #07110c;
+      background: var(--primary);
+    }
+
+    .window-brand strong { font-family: var(--display); font-size: 12px; font-weight: 600; }
+    .window-divider { width: 1px; height: 18px; background: var(--border); }
+    .window-project { min-width: 0; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .branch-chip { padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px; color: #bac5bf; background: var(--surface); font-size: 9px; }
+
+    .icon-btn, .plain-btn, .tab, .inspector-tab, .side-row, .composer-chip, .send-btn {
+      border: 0;
+      cursor: pointer;
+      transition: color 150ms ease, background 150ms ease, transform 150ms ease, border-color 150ms ease;
+    }
+
+    .icon-btn {
+      width: 30px;
+      height: 30px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 7px;
+      color: var(--muted);
+      background: transparent;
+    }
+
+    .icon-btn:hover, .plain-btn:hover { color: var(--text); background: var(--surface-high); transform: translateY(-1px); }
+    button:active { transform: scale(.97); }
+    button:focus-visible, textarea:focus-visible { outline: 2px solid var(--secondary); outline-offset: -1px; }
+
+    .desktop-body { min-height: 0; flex: 1; display: flex; }
+
+    .sidebar {
+      width: 240px;
+      flex: 0 0 240px;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      background: #111715;
+    }
+
+    .primary-nav { padding: 10px; display: grid; gap: 2px; border-bottom: 1px solid var(--border); }
+
+    .plain-btn {
+      min-height: 31px;
+      padding: 0 9px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      border-radius: 6px;
+      color: var(--muted);
+      background: transparent;
+      font-size: 10px;
+      text-align: left;
+    }
+
+    .plain-btn.primary { color: var(--text); }
+
+    .workspace-head {
+      height: 40px;
+      padding: 0 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #718079;
+      font-family: var(--display);
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .workspace-head span { flex: 1; }
+    .sidebar-scroll { min-height: 0; flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #34403b transparent; }
+    .side-section-label { padding: 10px 14px 5px; color: #68756f; font-size: 8px; font-weight: 600; text-transform: uppercase; }
+
+    .side-row {
+      width: calc(100% - 12px);
+      min-height: 48px;
+      margin: 1px 6px;
+      padding: 7px 8px;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      border-radius: 7px;
+      color: inherit;
+      text-align: left;
+      background: transparent;
+    }
+
+    .side-row:hover { background: var(--surface); }
+    .side-row.active { background: var(--surface-high); }
+    .side-status { width: 7px; height: 7px; margin-top: 5px; flex: 0 0 7px; border-radius: 50%; background: #68756f; }
+    .side-status.running { background: var(--primary); box-shadow: 0 0 0 3px rgb(114 214 159 / 10%); }
+    .side-status.attention { background: var(--warning); }
+    .side-copy { min-width: 0; flex: 1; }
+    .side-copy strong { display: block; overflow: hidden; font-size: 10px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+    .side-copy span { display: block; margin-top: 3px; overflow: hidden; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+    .side-diff { display: flex; gap: 4px; font-family: var(--display); font-size: 8px; }
+    .add { color: var(--primary); }
+    .del { color: var(--danger); }
+
+    .sidebar-footer { height: 42px; padding: 0 10px; display: flex; align-items: center; gap: 4px; border-top: 1px solid var(--border); }
+    .sidebar-footer .host-online { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 8px; }
+    .online-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
+
+    .workspace { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+
+    .tabbar {
+      height: 40px;
+      flex: 0 0 40px;
+      padding: 0 8px;
+      display: flex;
+      align-items: end;
+      gap: 2px;
+      border-bottom: 1px solid var(--border);
+      background: #111715;
+    }
+
+    .tab {
+      width: 210px;
+      height: 34px;
+      padding: 0 9px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid transparent;
+      border-bottom: 0;
+      border-radius: 7px 7px 0 0;
+      color: var(--muted);
+      background: transparent;
+      font-size: 9px;
+    }
+
+    .tab:hover { color: var(--text); background: rgb(28 36 33 / 65%); }
+    .tab.active { color: var(--text); border-color: var(--border); background: var(--base); }
+    .tab .title { min-width: 0; flex: 1; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+    .tab .tab-state { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
+    .tab .close { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 4px; color: #65726c; }
+    .tab .close:hover { color: var(--text); background: var(--surface-high); }
+    .new-tab { width: 30px; height: 30px; margin: 0 0 2px 3px; }
+
+    .work-main { min-height: 0; flex: 1; display: flex; }
+
+    .conversation {
+      min-width: 420px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    .conversation-head {
+      height: 45px;
+      flex: 0 0 45px;
+      padding: 0 15px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .conversation-title { min-width: 0; flex: 1; }
+    .conversation-title strong { display: block; overflow: hidden; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .conversation-title span { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
+    .memory-badge { padding: 4px 7px; display: flex; align-items: center; gap: 5px; border: 1px solid rgb(229 184 104 / 30%); border-radius: 6px; color: var(--warning); background: rgb(229 184 104 / 6%); font-size: 8px; }
+
+    .timeline { min-height: 0; flex: 1; overflow-y: auto; padding: 22px max(26px, calc((100% - 760px) / 2)); scrollbar-width: thin; scrollbar-color: #34403b transparent; }
+    .turn { margin-bottom: 22px; }
+    .turn-meta { margin-bottom: 6px; display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 8px; }
+    .turn-meta strong { color: #bdc7c2; font-size: 9px; font-weight: 500; }
+    .turn-body { color: #d2dbd6; font-size: 11px; line-height: 1.8; }
+
+    .user-message { padding: 12px 13px; border-left: 2px solid var(--secondary); background: rgb(130 169 255 / 7%); }
+    .user-message.selected { box-shadow: inset 0 0 0 1px rgb(130 169 255 / 18%); }
+    .message-actions { margin-top: 9px; display: flex; align-items: center; gap: 5px; }
+    .message-actions span { margin-right: auto; color: #7f8d86; font-size: 8px; }
+    .message-action, .audit-action, .dialog-button {
+      min-height: 27px;
+      padding: 0 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: #aebbb4;
+      background: rgb(15 20 19 / 70%);
+      font-size: 8px;
+      cursor: pointer;
+    }
+    .message-action:hover, .audit-action:hover, .dialog-button:hover { color: var(--text); border-color: #48564f; background: var(--surface-high); }
+    .message-action.primary, .dialog-button.primary { border-color: rgb(114 214 159 / 42%); color: var(--primary); }
+    .message-action.danger { color: var(--danger); }
+    .assistant-mark { width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+
+    .thinking {
+      margin: 9px 0;
+      padding-left: 11px;
+      border-left: 1px solid #37433e;
+      color: var(--muted);
+      font-size: 9px;
+      line-height: 1.65;
+    }
+
+    .tool {
+      margin: 8px 0;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface);
+    }
+
+    .tool-head {
+      width: 100%;
+      min-height: 34px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 0;
+      color: #bdc7c2;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .tool-head strong { font-size: 9px; font-weight: 500; }
+    .tool-head code { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-family: var(--display); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+    .tool-output { display: none; padding: 9px 11px; border-top: 1px solid var(--border); color: #aab8b1; background: #0d1211; font-family: var(--display); font-size: 8px; line-height: 1.65; white-space: pre-wrap; }
+    .tool.open .tool-output { display: block; }
+
+    .revision-rail { margin: 14px 0 0 4px; padding-left: 17px; position: relative; }
+    .revision-rail::before { content: ""; position: absolute; top: 2px; bottom: 2px; left: 4px; width: 1px; background: var(--warning); }
+    .revision-rail::after { content: ""; position: absolute; top: 2px; left: 0; width: 9px; height: 9px; border: 2px solid var(--warning); border-radius: 50%; background: var(--base); }
+    .revision-rail strong { display: block; color: var(--warning); font-size: 9px; font-weight: 600; }
+    .revision-rail span { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
+
+    .subagents { margin: 14px 0 0; padding: 8px 10px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); background: rgb(21 27 25 / 55%); font-size: 8px; }
+    .subagents strong { color: #bcc7c1; font-weight: 500; }
+    .subagents .running { margin-left: auto; color: var(--primary); }
+
+    .terminal-drawer { display: none; height: 205px; flex: 0 0 205px; border-top: 1px solid var(--border); background: #0b100f; }
+    .terminal-drawer.open { display: flex; flex-direction: column; animation: drawer-in 180ms ease-out; }
+    .terminal-title { height: 32px; padding: 0 10px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 8px; }
+    .terminal-title span { margin-left: auto; color: var(--primary); }
+    .terminal-code { min-height: 0; flex: 1; overflow: auto; padding: 10px 13px; color: #afbeb6; font-family: var(--display); font-size: 8px; line-height: 1.65; white-space: pre-wrap; }
+    .terminal-code .cmd { color: var(--secondary); }
+    .terminal-code .ok { color: var(--primary); }
+
+    .composer-wrap { padding: 10px max(22px, calc((100% - 760px) / 2)) 12px; border-top: 1px solid var(--border); background: rgb(15 20 19 / 97%); }
+    .composer { padding: 10px; border: 1px solid #3a4741; border-radius: 9px; background: var(--surface); }
+    .composer textarea { width: 100%; height: 40px; resize: none; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 10px; line-height: 1.55; }
+    .composer textarea::placeholder { color: #7f8d86; }
+    .composer-row { display: flex; align-items: center; gap: 7px; }
+    .composer-chip { height: 25px; padding: 0 8px; display: flex; align-items: center; gap: 5px; border-radius: 6px; color: #b6c1bb; background: var(--surface-high); font-size: 8px; }
+    .composer-chip:hover { color: var(--text); background: #25302c; }
+    .send-btn { width: 29px; height: 29px; margin-left: auto; display: grid; place-items: center; border-radius: 7px; color: #07110c; background: var(--primary); }
+    .send-btn:hover { filter: brightness(1.08); transform: translateY(-1px); }
+
+    .inspector {
+      width: 355px;
+      flex: 0 0 355px;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid var(--border);
+      background: #101614;
+    }
+
+    .inspector-tabs { height: 45px; flex: 0 0 45px; padding: 0 10px; display: flex; align-items: end; gap: 4px; border-bottom: 1px solid var(--border); }
+    .inspector-tab { height: 34px; padding: 0 10px; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; font-size: 9px; }
+    .inspector-tab:hover { color: var(--text); }
+    .inspector-tab.active { color: var(--text); border-bottom-color: var(--primary); }
+    .inspector-content { min-height: 0; flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #34403b transparent; }
+    .inspector-panel { display: none; }
+    .inspector-panel.active { display: block; animation: panel-in 180ms ease-out; }
+
+    .inspector-head { height: 40px; padding: 0 13px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 8px; }
+    .inspector-head strong { min-width: 0; flex: 1; overflow: hidden; color: #bac5bf; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+
+    .file-change { padding: 9px 12px; border-bottom: 1px solid rgb(48 58 54 / 60%); }
+    .file-change-head { display: flex; align-items: center; gap: 7px; }
+    .file-change-head strong { min-width: 0; flex: 1; overflow: hidden; font-size: 9px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+    .change-stat { display: flex; gap: 4px; font-family: var(--display); font-size: 8px; }
+    .code-preview { margin-top: 8px; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; font-family: var(--display); font-size: 7.5px; line-height: 1.55; }
+    .code-line { padding: 3px 7px; color: #8f9d96; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .code-line.old { color: #d99b98; background: rgb(239 129 125 / 9%); }
+    .code-line.new { color: #a6dcb9; background: rgb(114 214 159 / 9%); }
+
+    .tree-row { height: 29px; padding: 0 12px; display: flex; align-items: center; gap: 7px; color: #b4c0ba; font-size: 9px; }
+    .tree-row:hover { background: var(--surface); }
+    .tree-row.indent { padding-left: 31px; }
+    .tree-row span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .audit-card { padding: 12px; border-bottom: 1px solid var(--border); }
+    .audit-title { display: flex; align-items: center; gap: 7px; }
+    .audit-title strong { min-width: 0; flex: 1; overflow: hidden; font-size: 9px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+    .audit-title time { color: var(--muted); font-size: 7px; }
+    .audit-diff { margin-top: 8px; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; font-size: 8px; line-height: 1.5; }
+    .audit-old, .audit-new { padding: 6px 8px; }
+    .audit-old { color: #dda5a2; background: rgb(239 129 125 / 8%); }
+    .audit-new { color: #a7deba; background: rgb(114 214 159 / 8%); }
+    .audit-meta { margin-top: 7px; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 7px; }
+    .audit-meta .revision { padding: 2px 5px; border: 1px solid var(--border); border-radius: 4px; font-family: var(--display); }
+    .audit-actions { margin-top: 8px; display: flex; justify-content: flex-end; gap: 5px; }
+
+    .dialog-layer {
+      position: absolute;
+      inset: 0;
+      z-index: 80;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgb(3 7 6 / 68%);
+      backdrop-filter: blur(3px);
+    }
+    .dialog-layer.open { display: flex; animation: panel-in 160ms ease-out; }
+    .edit-dialog { width: min(560px, 100%); overflow: hidden; border: 1px solid #46524d; border-radius: 8px; background: #121816; box-shadow: 0 28px 80px rgb(0 0 0 / 60%); }
+    .dialog-head { min-height: 49px; padding: 0 14px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+    .dialog-head > i { color: var(--warning); }
+    .dialog-title { min-width: 0; flex: 1; }
+    .dialog-title strong { display: block; font-size: 11px; font-weight: 600; }
+    .dialog-title span { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
+    .dialog-body { padding: 14px; }
+    .dialog-label { margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; color: #bac5bf; font-size: 9px; }
+    .dialog-label span { color: var(--muted); font-size: 7px; }
+    .edit-dialog textarea { width: 100%; min-height: 132px; padding: 11px; resize: vertical; border: 1px solid #3d4944; border-radius: 7px; outline: 0; color: var(--text); background: #0d1211; font-size: 10px; line-height: 1.7; }
+    .edit-dialog textarea:focus { border-color: var(--secondary); }
+    .revision-note { margin-top: 10px; padding: 9px 10px; display: flex; align-items: flex-start; gap: 8px; border-left: 2px solid var(--warning); color: var(--muted); background: rgb(229 184 104 / 6%); font-size: 8px; line-height: 1.6; }
+    .revision-note strong { color: var(--warning); font-weight: 500; }
+    .dialog-footer { padding: 11px 14px; display: flex; align-items: center; gap: 7px; border-top: 1px solid var(--border); }
+    .dialog-footer .revision-lock { margin-right: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 7px; }
+    .dialog-button { min-height: 31px; padding-inline: 11px; }
+
+    .toast { position: absolute; z-index: 60; left: 50%; bottom: 18px; padding: 8px 12px; transform: translate(-50%, 10px); border: 1px solid #47534e; border-radius: 7px; color: #dfe7e2; background: #222b27; font-size: 9px; opacity: 0; pointer-events: none; transition: opacity 180ms ease, transform 180ms ease; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    @keyframes panel-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes drawer-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+    @media (max-width: 1050px) {
+      .sidebar { width: 200px; flex-basis: 200px; }
+      .inspector { width: 300px; flex-basis: 300px; }
+      .tab { width: 175px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="proto-banner"><i data-lucide="flask-conical" width="14"></i> PROTO — Memory Forge 桌面工作台，仅供预览确认</div>
+  <main class="stage">
+    <section class="desktop" aria-label="Memory Forge desktop workspace prototype">
+      <header class="windowbar">
+        <div class="traffic"><span></span><span></span><span></span></div>
+        <div class="window-brand">
+          <span class="brand-mark"><i data-lucide="anvil" width="15"></i></span>
+          <strong>Memory Forge</strong>
+          <span class="window-divider"></span>
+          <span class="window-project">memory-forge-rs</span>
+          <span class="branch-chip">feature/remote-foundation</span>
+        </div>
+        <button class="icon-btn" aria-label="同步" onclick="showToast('已与 REZVK-PC 同步')"><i data-lucide="refresh-cw" width="14"></i></button>
+        <button class="icon-btn" aria-label="设置" onclick="showToast('设置已打开')"><i data-lucide="settings" width="14"></i></button>
+      </header>
+
+      <div class="desktop-body">
+        <aside class="sidebar">
+          <nav class="primary-nav" aria-label="主要导航">
+            <button class="plain-btn primary" onclick="showToast('新建工作区流程已打开')"><i data-lucide="plus" width="14"></i>新建工作区</button>
+            <button class="plain-btn" onclick="showToast('历史会话已打开')"><i data-lucide="history" width="14"></i>历史</button>
+            <button class="plain-btn" onclick="showToast('提示词库已打开')"><i data-lucide="library" width="14"></i>提示词库</button>
+          </nav>
+          <div class="workspace-head"><span>Workspaces</span><button class="icon-btn" aria-label="搜索工作区" onclick="showToast('搜索工作区')"><i data-lucide="search" width="13"></i></button><button class="icon-btn" aria-label="筛选" onclick="showToast('仅显示活跃工作区')"><i data-lucide="list-filter" width="13"></i></button></div>
+          <div class="sidebar-scroll">
+            <div class="side-section-label">正在进行</div>
+            <button class="side-row active" onclick="selectSidebar(this, 'Memory Forge 远程工作台')"><span class="side-status running"></span><span class="side-copy"><strong>Memory Forge 远程工作台</strong><span>memory-forge-rs · Codex</span></span><span class="side-diff"><b class="add">+118</b><b class="del">−24</b></span></button>
+            <button class="side-row" onclick="selectSidebar(this, 'Paseo 移动端研究')"><span class="side-status attention"></span><span class="side-copy"><strong>Paseo 移动端研究</strong><span>paseo · Codex · 待确认</span></span></button>
+            <button class="side-row" onclick="selectSidebar(this, '远程终端断线重连')"><span class="side-status running"></span><span class="side-copy"><strong>远程终端断线重连</strong><span>memory-forge-rs · Claude</span></span></button>
+
+            <div class="side-section-label">Ready to review</div>
+            <button class="side-row" onclick="selectSidebar(this, 'Grok 会话适配器')"><span class="side-status"></span><span class="side-copy"><strong>Grok 会话适配器</strong><span>feature/grok-build · Grok</span></span><span class="side-diff"><b class="add">+84</b><b class="del">−12</b></span></button>
+            <button class="side-row" onclick="selectSidebar(this, 'Codex 会话索引修复')"><span class="side-status"></span><span class="side-copy"><strong>Codex 会话索引修复</strong><span>main · Codex</span></span></button>
+
+            <div class="side-section-label">Done</div>
+            <button class="side-row" onclick="selectSidebar(this, 'Gemini JSONL 导入')"><span class="side-status"></span><span class="side-copy"><strong>Gemini JSONL 导入</strong><span>feature/gemini · Gemini</span></span></button>
+          </div>
+          <footer class="sidebar-footer">
+            <button class="icon-btn" aria-label="终端" onclick="toggleTerminal()"><i data-lucide="square-terminal" width="14"></i></button>
+            <button class="icon-btn" aria-label="仪表盘" onclick="showToast('仪表盘已打开')"><i data-lucide="layout-dashboard" width="14"></i></button>
+            <button class="icon-btn" aria-label="帮助" onclick="showToast('帮助已打开')"><i data-lucide="circle-help" width="14"></i></button>
+            <span class="host-online"><span class="online-dot"></span>REZVK-PC</span>
+          </footer>
+        </aside>
+
+        <section class="workspace">
+          <div class="tabbar" role="tablist">
+            <button class="tab active" role="tab" aria-selected="true" onclick="selectTopTab(this, 'Memory Forge 远程工作台')"><span class="tab-state"></span><span class="title">Memory Forge 远程工作台</span><span class="close" onclick="closeTab(event, this)"><i data-lucide="x" width="11"></i></span></button>
+            <button class="tab" role="tab" aria-selected="false" onclick="selectTopTab(this, 'Paseo 移动端研究')"><i data-lucide="bot" width="12"></i><span class="title">Paseo 移动端研究</span><span class="close" onclick="closeTab(event, this)"><i data-lucide="x" width="11"></i></span></button>
+            <button class="tab" role="tab" aria-selected="false" onclick="selectTopTab(this, '终端断线重连')"><i data-lucide="square-terminal" width="12"></i><span class="title">终端断线重连</span><span class="close" onclick="closeTab(event, this)"><i data-lucide="x" width="11"></i></span></button>
+            <button class="icon-btn new-tab" aria-label="打开新页签" onclick="addPrototypeTab()"><i data-lucide="plus" width="14"></i></button>
+          </div>
+
+          <div class="work-main">
+            <section class="conversation">
+              <header class="conversation-head">
+                <div class="assistant-mark"><i data-lucide="bot" width="13"></i></div>
+                <div class="conversation-title"><strong id="conversation-title">Memory Forge 远程工作台</strong><span>Codex · 正在运行 · 最后同步刚刚</span></div>
+                <div class="memory-badge"><i data-lucide="file-clock" width="12"></i>2 次记忆修订</div>
+                <button id="terminal-toggle" class="icon-btn" aria-label="切换原始终端" onclick="toggleTerminal()"><i data-lucide="square-terminal" width="15"></i></button>
+                <button class="icon-btn" aria-label="更多操作" onclick="showToast('会话操作菜单已打开')"><i data-lucide="ellipsis" width="15"></i></button>
+              </header>
+
+              <div id="timeline" class="timeline">
+                <article class="turn user-message selected">
+                  <div class="turn-meta"><strong>你</strong><span>15:11</span></div>
+                  <div class="turn-body">把移动端做成真正的会话工作台：支持多个 Agent 页签、工具调用和远程输入，同时保留 Memory Forge 的记忆编辑能力。</div>
+                  <div class="message-actions">
+                    <span><i data-lucide="history" width="10"></i> 历史消息 · revision 18</span>
+                    <button class="message-action primary" onclick="openEditDialog()"><i data-lucide="pencil-line" width="11"></i>编辑记忆</button>
+                    <button class="message-action" onclick="showToast('注入位置菜单已打开')"><i data-lucide="between-horizontal-start" width="11"></i>注入</button>
+                    <button class="message-action danger" onclick="showToast('擦除前需要再次确认')"><i data-lucide="eraser" width="11"></i>擦除</button>
+                  </div>
+                </article>
+
+                <article class="turn">
+                  <div class="turn-meta"><span class="assistant-mark"><i data-lucide="bot" width="12"></i></span><strong>Codex</strong><span>15:12</span><span>·</span><span>工作区写入</span></div>
+                  <div class="thinking">正在核对远程协议、会话状态和终端生命周期。结构化消息应该成为主要阅读表面，PTY 只作为原始输出与兼容层。</div>
+                  <div class="tool">
+                    <button class="tool-head" onclick="toggleTool(this)"><i data-lucide="terminal" width="13"></i><strong>Shell</strong><code>rg -n "remote|terminal|session" src src-tauri</code><i data-lucide="check" width="12" color="var(--primary)"></i><i data-lucide="chevron-down" width="12"></i></button>
+                    <div class="tool-output">src/features/terminal/remote-terminal-context.tsx:296
+src-tauri/src/remote_server.rs:487
+docs/remote-protocol-v1.md:72</div>
+                  </div>
+                  <div class="tool">
+                    <button class="tool-head" onclick="toggleTool(this)"><i data-lucide="file-text" width="13"></i><strong>Read</strong><code>docs/remote-protocol-v1.md</code><i data-lucide="check" width="12" color="var(--primary)"></i><i data-lucide="chevron-down" width="12"></i></button>
+                    <div class="tool-output">Remote snapshots are authoritative.
+Terminal output uses bounded cursor-based chunks.
+Mutations require expectedRevision and mutationId.</div>
+                  </div>
+                  <div class="turn-body">结论：桌面端采用结构化会话主视图，工具调用可折叠，底部保留可展开的原始终端。这样既比纯终端更容易阅读，也不会丢失无法解析的 CLI 输出。</div>
+                  <div class="revision-rail"><strong>记忆已修订</strong><span>将“手机端保持只读”修正为“允许带审计与 revision 的远程写入” · 可恢复</span></div>
+                  <div class="subagents"><i data-lucide="network" width="13"></i><strong>1 个子 Agent</strong><span>正在检查桌面页签状态模型</span><span class="running">运行中</span></div>
+                </article>
+              </div>
+
+              <section id="terminal-drawer" class="terminal-drawer" aria-label="原始终端">
+                <div class="terminal-title"><i data-lucide="square-terminal" width="12"></i>原始终端 · Resume / Codex <span>PTY 已连接</span><button class="icon-btn" aria-label="关闭终端" onclick="toggleTerminal()"><i data-lucide="x" width="12"></i></button></div>
+                <div class="terminal-code"><span class="cmd">PS F:\workspacevk\109-0712\memory-forge-rs&gt;</span> npm run typecheck
+
+&gt; memory-forge-v3@3.4.0 typecheck
+&gt; tsc --noEmit
+<span class="ok">✓ TypeScript check passed</span>
+
+<span class="cmd">PS ...&gt;</span> cargo test --manifest-path src-tauri/Cargo.toml
+running 51 tests
+<span class="ok">test result: ok. 51 passed; 0 failed</span></div>
+              </section>
+
+              <form class="composer-wrap" onsubmit="sendMessage(event)">
+                <div class="composer">
+                  <textarea id="desktop-input" aria-label="给 Agent 发消息" placeholder="给 Agent 发消息，标记 @files，或输入 / 命令"></textarea>
+                  <div class="composer-row">
+                    <button type="button" class="icon-btn" aria-label="添加附件" onclick="showToast('附件选择器已打开')"><i data-lucide="plus" width="14"></i></button>
+                    <button type="button" class="composer-chip" onclick="showToast('模型：GPT-5.2 Codex')"><i data-lucide="cpu" width="11"></i>GPT-5.2 Codex</button>
+                    <button type="button" class="composer-chip" onclick="showToast('推理强度：高')"><i data-lucide="brain" width="11"></i>高</button>
+                    <button type="button" class="composer-chip" onclick="showToast('权限：工作区写入')"><i data-lucide="shield-check" width="11"></i>工作区写入</button>
+                    <button type="submit" class="send-btn" aria-label="发送"><i data-lucide="arrow-up" width="15"></i></button>
+                  </div>
+                </div>
+              </form>
+              <div id="toast" class="toast" role="status"></div>
+            </section>
+
+            <aside class="inspector">
+              <div class="inspector-tabs" role="tablist">
+                <button class="inspector-tab" role="tab" aria-selected="false" onclick="switchInspector('changes', this)">Changes</button>
+                <button class="inspector-tab" role="tab" aria-selected="false" onclick="switchInspector('files', this)">Files</button>
+                <button class="inspector-tab active" role="tab" aria-selected="true" onclick="switchInspector('memory', this)">Memory</button>
+              </div>
+              <div class="inspector-content">
+                <section id="inspector-changes" class="inspector-panel">
+                  <div class="inspector-head"><i data-lucide="git-branch" width="12"></i><strong>feature/remote-foundation</strong><span class="add">+9.7k</span><span class="del">−297</span></div>
+                  <article class="file-change">
+                    <div class="file-change-head"><i data-lucide="file-code-2" width="12"></i><strong>src-tauri/src/remote_server.rs</strong><span class="change-stat"><b class="add">+118</b><b class="del">−24</b></span></div>
+                    <div class="code-preview"><div class="code-line">487  .route(&quot;/terminals&quot;, get(terminal_list))</div><div class="code-line old">−  return poll_terminal_output();</div><div class="code-line new">+  return stream_authoritative_events();</div><div class="code-line new">+  enforce_terminal_owner(device_id)?;</div></div>
+                  </article>
+                  <article class="file-change">
+                    <div class="file-change-head"><i data-lucide="file-code-2" width="12"></i><strong>src/features/desktop/provider.tsx</strong><span class="change-stat"><b class="add">+84</b><b class="del">−12</b></span></div>
+                    <div class="code-preview"><div class="code-line">206  const activeWorkspace = state.workspace;</div><div class="code-line old">−  selectedSessionKey: string | null;</div><div class="code-line new">+  openSessionTabs: SessionTab[];</div><div class="code-line new">+  activeSessionTabId: string | null;</div></div>
+                  </article>
+                  <article class="file-change">
+                    <div class="file-change-head"><i data-lucide="file-text" width="12"></i><strong>docs/remote-protocol-v1.md</strong><span class="change-stat"><b class="add">+36</b></span></div>
+                  </article>
+                </section>
+
+                <section id="inspector-files" class="inspector-panel">
+                  <div class="inspector-head"><i data-lucide="folder-git-2" width="12"></i><strong>memory-forge-rs</strong><button class="icon-btn" onclick="showToast('文件树已刷新')"><i data-lucide="refresh-cw" width="12"></i></button></div>
+                  <div class="tree-row"><i data-lucide="chevron-down" width="11"></i><i data-lucide="folder" width="12"></i><span>src</span></div>
+                  <div class="tree-row indent"><i data-lucide="folder" width="12"></i><span>app</span></div>
+                  <div class="tree-row indent"><i data-lucide="folder" width="12"></i><span>components</span></div>
+                  <div class="tree-row indent"><i data-lucide="folder" width="12"></i><span>features</span></div>
+                  <div class="tree-row"><i data-lucide="chevron-down" width="11"></i><i data-lucide="folder" width="12"></i><span>src-tauri</span></div>
+                  <div class="tree-row indent"><i data-lucide="folder" width="12"></i><span>src</span></div>
+                  <div class="tree-row indent"><i data-lucide="file-code-2" width="12"></i><span>remote_protocol.rs</span></div>
+                  <div class="tree-row indent"><i data-lucide="file-code-2" width="12"></i><span>remote_server.rs</span></div>
+                  <div class="tree-row"><i data-lucide="file-text" width="12"></i><span>README.md</span></div>
+                </section>
+
+                <section id="inspector-memory" class="inspector-panel active">
+                  <div class="inspector-head"><i data-lucide="file-clock" width="12"></i><strong>Memory 审计 · 2 次修订</strong><span>全部可恢复</span></div>
+                  <article class="audit-card">
+                    <div class="audit-title"><i data-lucide="pencil-line" width="12" color="var(--warning)"></i><strong>用户消息 · 第 18 条</strong><time>2 分钟前</time></div>
+                    <div class="audit-diff"><div class="audit-old">− 手机端保持只读，避免写入风险。</div><div class="audit-new">+ 手机端允许审计写入，并用 revision 防止覆盖。</div></div>
+                    <div class="audit-meta"><span class="revision">r17 → r18</span><span>由 REZVK-PC 修改</span></div>
+                    <div class="audit-actions"><button class="audit-action" onclick="openEditDialog()">再次编辑</button><button class="audit-action" onclick="showToast('已定位到第 18 条消息')">定位</button><button class="audit-action" onclick="showToast('已恢复到 revision 17')">恢复</button></div>
+                  </article>
+                  <article class="audit-card">
+                    <div class="audit-title"><i data-lucide="eraser" width="12" color="var(--danger)"></i><strong>助手消息 · 第 21 条</strong><time>9 分钟前</time></div>
+                    <div class="audit-diff"><div class="audit-old">− 与当前方案无关的调试输出。</div><div class="audit-new">+ 已擦除，后续上下文不再读取。</div></div>
+                    <div class="audit-meta"><span class="revision">r20 → r21</span><span>保留原文用于审计</span></div>
+                    <div class="audit-actions"><button class="audit-action" onclick="showToast('已定位到第 21 条消息')">定位</button><button class="audit-action" onclick="showToast('已恢复被擦除的消息')">恢复</button></div>
+                  </article>
+                </section>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </div>
+      <div id="edit-dialog-layer" class="dialog-layer" role="dialog" aria-modal="true" aria-labelledby="edit-dialog-title" onclick="closeEditDialog(event)">
+        <section class="edit-dialog" onclick="event.stopPropagation()">
+          <header class="dialog-head">
+            <i data-lucide="pencil-line" width="17"></i>
+            <div class="dialog-title"><strong id="edit-dialog-title">编辑历史记忆</strong><span>用户消息 · 第 18 条 · 此修改会影响后续上下文</span></div>
+            <button class="icon-btn" aria-label="关闭编辑" onclick="closeEditDialog()"><i data-lucide="x" width="14"></i></button>
+          </header>
+          <div class="dialog-body">
+            <div class="dialog-label"><label for="revision-editor">消息内容</label><span>128 / 4000</span></div>
+            <textarea id="revision-editor">把移动端做成真正的会话工作台：支持多个 Agent 页签、工具调用和远程输入，同时保留 Memory Forge 的记忆编辑能力。</textarea>
+            <div class="revision-note"><i data-lucide="shield-check" width="14"></i><div><strong>不会静默覆盖。</strong> 保存时校验 revision 18；若另一台设备已修改，会先展示冲突内容。</div></div>
+          </div>
+          <footer class="dialog-footer">
+            <span class="revision-lock"><i data-lucide="lock-keyhole" width="11"></i>基于 revision 18</span>
+            <button class="dialog-button" onclick="closeEditDialog()">取消</button>
+            <button class="dialog-button primary" onclick="saveRevision()"><i data-lucide="check" width="12"></i>保存为新修订</button>
+          </footer>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    lucide.createIcons();
+
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toast._timer);
+      toast._timer = setTimeout(() => toast.classList.remove('show'), 1800);
+    }
+
+    function selectSidebar(button, title) {
+      document.querySelectorAll('.side-row').forEach((row) => row.classList.remove('active'));
+      button.classList.add('active');
+      document.getElementById('conversation-title').textContent = title;
+      showToast(`已切换：${title}`);
+    }
+
+    function selectTopTab(button, title) {
+      document.querySelectorAll('.tab').forEach((tab) => {
+        tab.classList.remove('active');
+        tab.setAttribute('aria-selected', 'false');
+      });
+      button.classList.add('active');
+      button.setAttribute('aria-selected', 'true');
+      document.getElementById('conversation-title').textContent = title;
+    }
+
+    function closeTab(event, closeButton) {
+      event.stopPropagation();
+      const tab = closeButton.closest('.tab');
+      const wasActive = tab.classList.contains('active');
+      tab.remove();
+      if (wasActive) {
+        const next = document.querySelector('.tab');
+        if (next) next.click();
+      }
+      showToast('页签已关闭，会话仍保留在工作区');
+    }
+
+    function addPrototypeTab() {
+      const tabbar = document.querySelector('.tabbar');
+      const addButton = document.querySelector('.new-tab');
+      const button = document.createElement('button');
+      button.className = 'tab';
+      button.setAttribute('role', 'tab');
+      button.innerHTML = '<i data-lucide="bot" width="12"></i><span class="title">新 Agent</span><span class="close"><i data-lucide="x" width="11"></i></span>';
+      button.onclick = () => selectTopTab(button, '新 Agent');
+      button.querySelector('.close').onclick = (event) => closeTab(event, button.querySelector('.close'));
+      tabbar.insertBefore(button, addButton);
+      lucide.createIcons();
+      button.click();
+    }
+
+    function toggleTool(button) {
+      button.closest('.tool').classList.toggle('open');
+    }
+
+    function toggleTerminal() {
+      const drawer = document.getElementById('terminal-drawer');
+      const toggle = document.getElementById('terminal-toggle');
+      const open = drawer.classList.toggle('open');
+      toggle.style.color = open ? 'var(--primary)' : '';
+      showToast(open ? '原始终端已展开' : '原始终端已收起');
+    }
+
+    function switchInspector(name, button) {
+      document.querySelectorAll('.inspector-tab').forEach((tab) => {
+        tab.classList.remove('active');
+        tab.setAttribute('aria-selected', 'false');
+      });
+      document.querySelectorAll('.inspector-panel').forEach((panel) => panel.classList.remove('active'));
+      button.classList.add('active');
+      button.setAttribute('aria-selected', 'true');
+      document.getElementById(`inspector-${name}`).classList.add('active');
+    }
+
+    function openEditDialog() {
+      document.getElementById('edit-dialog-layer').classList.add('open');
+      window.setTimeout(() => document.getElementById('revision-editor').focus(), 0);
+    }
+
+    function closeEditDialog(event) {
+      if (event && event.target !== event.currentTarget) return;
+      document.getElementById('edit-dialog-layer').classList.remove('open');
+    }
+
+    function saveRevision() {
+      document.getElementById('edit-dialog-layer').classList.remove('open');
+      showToast('已保存 revision 19，审计记录已更新');
+    }
+
+    function sendMessage(event) {
+      event.preventDefault();
+      const input = document.getElementById('desktop-input');
+      const value = input.value.trim();
+      if (!value) {
+        showToast('先输入一条消息');
+        return;
+      }
+      const turn = document.createElement('article');
+      turn.className = 'turn user-message';
+      turn.innerHTML = '<div class="turn-meta"><strong>你</strong><span>刚刚</span></div><div class="turn-body"></div>';
+      turn.querySelector('.turn-body').textContent = value;
+      document.getElementById('timeline').appendChild(turn);
+      input.value = '';
+      turn.scrollIntoView({ behavior: 'smooth' });
+      showToast('消息已发送到主机');
+    }
+  </script>
+</body>
+</html>

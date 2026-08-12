@@ -8,13 +8,14 @@ import { useDesktop } from '@/features/desktop/provider'
 import { api, isSessionRevisionConflict } from '@/features/desktop/api'
 import type { MessageKey } from '@/features/desktop/i18n'
 import type { EditorTarget, TimelineBlock } from '@/features/desktop/types'
-import { Clock, Pencil, Check, Copy, User, Bot, Lightbulb, RefreshCw, Terminal, FileText, CheckCircle, Download, Trash2, Search, ChevronUp, ChevronDown, X, Star, Archive, List, Play, GitFork, FolderOpen, MousePointer2, Code, Sparkles, ArrowLeft, Eye } from 'lucide-react'
+import { Clock, Pencil, Check, Copy, User, Bot, Lightbulb, RefreshCw, Terminal, FileText, CheckCircle, Download, Trash2, Search, ChevronUp, ChevronDown, X, Star, Archive, List, Play, GitFork, FolderOpen, MousePointer2, Code, Sparkles, ArrowLeft, Eye, LocateFixed } from 'lucide-react'
 import { ConfirmDialog, useConfirmDialog } from '@/components/ui/confirm-dialog'
 import { save } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { useTerminal } from '@/features/terminal/terminal-context'
 import { useRemoteTerminal } from '@/features/terminal/remote-terminal-context'
-import { useLocation, useNavigate } from 'react-router'
+import { useNavigate } from 'react-router'
+import { resolveSessionCapabilities } from '@/features/session/capabilities'
 
 const PAGE_SIZE = 50
 const TOOL_INPUT_EXPORT_LIMIT = 8192
@@ -74,8 +75,7 @@ const getEditorIcon = (id: string) => {
 
 export function SessionDetail() {
   const navigate = useNavigate()
-  const location = useLocation()
-  const { t, state, dispatch, isRemote, isReadOnlyRemote, remoteCapabilities } = useDesktop()
+  const { t, state, dispatch, isRemote, remoteCapabilities } = useDesktop()
   const currentPlatform = state.currentPlatform
   const sessionDetail = state.sessionDetail
   const sessions = state.sessions
@@ -84,6 +84,9 @@ export function SessionDetail() {
   const showEditLog = state.showEditLog
   const sessionStatus = state.sessionStatus
   const globalSearchQuery = state.searchQuery
+  const activeWorkspaceTabId = state.workspace.activeTabId
+  const sessionCapabilities = resolveSessionCapabilities(sessionDetail, isRemote, remoteCapabilities)
+  const isReadOnlySession = !sessionCapabilities.edit && !sessionCapabilities.erase
 
   const { startTerminal } = useTerminal()
   const { startTerminal: startRemoteTerminal } = useRemoteTerminal()
@@ -107,17 +110,22 @@ export function SessionDetail() {
   const [preferredEditorId, setPreferredEditorId] = useState<string | null>(null)
   const [editorMenuOpen, setEditorMenuOpen] = useState(false)
   const [openingEditorId, setOpeningEditorId] = useState<string | null>(null)
+  const [locatedBlockId, setLocatedBlockId] = useState<string | null>(null)
 
   // New visual states for dropdowns and inline alias editing
   const [terminalMenuOpen, setTerminalMenuOpen] = useState(false)
+  const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false)
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const [isEditingAlias, setIsEditingAlias] = useState(false)
   const [tempAlias, setTempAlias] = useState('')
 
   const messageScrollRef = useRef<HTMLDivElement>(null)
+  const pendingScrollOffsetRef = useRef(0)
+  const scrollWriteFrameRef = useRef<number | null>(null)
   const activeSessionKeyRef = useRef<string | null>(null)
   const editorMenuRef = useRef<HTMLDivElement>(null)
   const terminalMenuRef = useRef<HTMLDivElement>(null)
+  const sessionSwitcherRef = useRef<HTMLDivElement>(null)
   const exportMenuRef = useRef<HTMLDivElement>(null)
 
   const { confirm, dialogProps: confirmDialogProps } = useConfirmDialog()
@@ -126,6 +134,9 @@ export function SessionDetail() {
     function handleClickOutside(event: MouseEvent) {
       if (terminalMenuRef.current && !terminalMenuRef.current.contains(event.target as Node)) {
         setTerminalMenuOpen(false)
+      }
+      if (sessionSwitcherRef.current && !sessionSwitcherRef.current.contains(event.target as Node)) {
+        setSessionSwitcherOpen(false)
       }
       if (editorMenuRef.current && !editorMenuRef.current.contains(event.target as Node)) {
         setEditorMenuOpen(false)
@@ -144,11 +155,37 @@ export function SessionDetail() {
     activeSessionKeyRef.current = selectedSessionKey
   }, [selectedSessionKey])
 
+  const handleMessageScroll = useCallback(() => {
+    if (!activeWorkspaceTabId || !messageScrollRef.current) return
+    pendingScrollOffsetRef.current = messageScrollRef.current.scrollTop
+    if (scrollWriteFrameRef.current !== null) return
+    scrollWriteFrameRef.current = window.requestAnimationFrame(() => {
+      scrollWriteFrameRef.current = null
+      dispatch({
+        type: 'workspace',
+        payload: {
+          type: 'restore-view-state',
+          payload: {
+            tabId: activeWorkspaceTabId,
+            state: { scrollOffset: pendingScrollOffsetRef.current },
+          },
+        },
+      })
+    })
+  }, [activeWorkspaceTabId, dispatch])
+
+  useEffect(() => () => {
+    if (scrollWriteFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollWriteFrameRef.current)
+    }
+  }, [])
+
   useEffect(() => {
     setOpeningKey(null)
     setOpeningEditorId(null)
     setCopiedKey(null)
     setTerminalMenuOpen(false)
+    setSessionSwitcherOpen(false)
     setEditorMenuOpen(false)
     setExportMenuOpen(false)
   }, [selectedSessionKey])
@@ -200,6 +237,10 @@ export function SessionDetail() {
   }, [dispatch, sessionStatus])
 
   const blocks = sessionDetail?.blocks ?? []
+  const revisedTargets = useMemo(
+    () => new Set(state.editLog.map((entry) => entry.editTarget)),
+    [state.editLog],
+  )
   const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
   const preferredEditor = useMemo(() => {
     if (editorTargets.length === 0) return null
@@ -284,8 +325,33 @@ export function SessionDetail() {
   }, [matchingBlockIds])
 
   useEffect(() => {
-    messageScrollRef.current?.scrollTo({ top: 0 })
-  }, [sessionDetail?.sessionKey, roleFilter])
+    const scrollElement = messageScrollRef.current
+    if (!scrollElement) return
+    const offset = activeWorkspaceTabId
+      ? state.workspace.viewByTabId[activeWorkspaceTabId]?.scrollOffset ?? 0
+      : 0
+    const frame = window.requestAnimationFrame(() => {
+      scrollElement.scrollTo({ top: offset })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeWorkspaceTabId, roleFilter, sessionDetail?.sessionKey])
+
+  useEffect(() => {
+    const target = state.locateMessageTarget
+    if (!target || target.platform !== currentPlatform || target.sessionKey !== selectedSessionKey) return
+    const block = blocks.find((item) => (item.editTarget || item.id) === target.editTarget)
+    if (!block) return
+    const index = blockIndexById.get(block.id)
+    if (index === undefined) {
+      if (roleFilter !== 'all') dispatch({ type: 'setRoleFilter', payload: 'all' })
+      return
+    }
+    scrollToBlockIndex(index)
+    setLocatedBlockId(block.id)
+    dispatch({ type: 'setLocateMessageTarget', payload: null })
+    const timer = window.setTimeout(() => setLocatedBlockId(null), 1800)
+    return () => window.clearTimeout(timer)
+  }, [state.locateMessageTarget, currentPlatform, selectedSessionKey, blocks, blockIndexById, roleFilter, dispatch, scrollToBlockIndex])
 
   if (currentPlatform === 'dashboard' || currentPlatform === 'about' || currentPlatform === 'prompts' || currentPlatform === 'settings' || !sessionDetail || (isRemote && !selectedSessionKey)) {
     if (isRemote) {
@@ -329,11 +395,14 @@ export function SessionDetail() {
   }
 
   const handleEditBlock = (block: typeof sessionDetail.blocks[0]) => {
+    if (!sessionCapabilities.edit) return
     dispatch({ type: 'setShowEditLog', payload: true })
     dispatch({
       type: 'setEditingBlock',
       payload: {
         id: block.editTarget || block.id,
+        platform: currentPlatform,
+        sessionKey: sessionDetail.sessionKey,
         content: block.content,
         originalContent: block.content,
         role: block.role,
@@ -342,7 +411,25 @@ export function SessionDetail() {
     })
   }
 
+  const handleLocateAudit = async (block: typeof sessionDetail.blocks[0]) => {
+    const sessionKey = sessionDetail.sessionKey
+    const editTarget = block.editTarget || block.id
+    dispatch({ type: 'setShowEditLog', payload: true })
+    try {
+      const logs = await api.getEditLog(currentPlatform, sessionKey)
+      dispatch({ type: 'setEditLogForSession', payload: { platform: currentPlatform, sessionKey, editLog: logs } })
+      dispatch({
+        type: 'setInspectMemoryTarget',
+        payload: { platform: currentPlatform, sessionKey, editTarget },
+      })
+    } catch (error) {
+      console.error('Failed to locate message audit history:', error)
+      dispatch({ type: 'setSessionStatus', payload: { tone: 'error', message: t('session.refreshFailed') } })
+    }
+  }
+
   const handleEraseBlock = async (block: typeof sessionDetail.blocks[0]) => {
+    if (!sessionCapabilities.erase) return
     const sessionKey = sessionDetail.sessionKey
     const expectedRevision = sessionDetail.revision
     if (!await confirm({ title: t('session.erase'), description: t('session.eraseConfirm'), variant: 'danger' })) return
@@ -353,7 +440,7 @@ export function SessionDetail() {
         api.getEditLog(currentPlatform, sessionKey),
       ])
       dispatch({ type: 'setSessionDetail', payload: updated })
-      dispatch({ type: 'setEditLog', payload: logs })
+      dispatch({ type: 'setEditLogForSession', payload: { platform: currentPlatform, sessionKey, editLog: logs } })
       dispatch({ type: 'setSessionStatus', payload: { tone: 'success', message: t('session.messageSaved') } })
     } catch (err) {
       console.error('Failed to erase message:', err)
@@ -365,7 +452,7 @@ export function SessionDetail() {
             api.getEditLog(currentPlatform, sessionKey),
           ])
           dispatch({ type: 'setSessionDetail', payload: updated })
-          dispatch({ type: 'setEditLog', payload: logs })
+          dispatch({ type: 'setEditLogForSession', payload: { platform: currentPlatform, sessionKey, editLog: logs } })
         } catch (refreshError) {
           console.error('Failed to refresh after revision conflict:', refreshError)
         }
@@ -454,7 +541,7 @@ export function SessionDetail() {
       dispatch({ type: 'setSessionDetail', payload: detail })
       dispatch({ type: 'setSessions', payload: result.items })
       if (logs) {
-        dispatch({ type: 'setEditLog', payload: logs })
+        dispatch({ type: 'setEditLogForSession', payload: { platform: currentPlatform, sessionKey: selectedSessionKey, editLog: logs } })
       }
       setRefreshDone(true)
       dispatch({ type: 'setSessionStatus', payload: { tone: 'success', message: t('session.refreshed') } })
@@ -532,7 +619,25 @@ export function SessionDetail() {
       })
       return
     }
-    navigate('/terminal-sessions')
+    if (isRemote) {
+      navigate('/terminal-sessions')
+      return
+    }
+    const targetTab = state.workspace.openTabs.find(
+      (tab) => tab.platform === currentPlatform && tab.sessionKey === sessionDetail.sessionKey,
+    )
+    if (targetTab) {
+      dispatch({
+        type: 'workspace',
+        payload: {
+          type: 'restore-view-state',
+          payload: {
+            tabId: targetTab.id,
+            state: { terminalId, terminalDrawerOpen: true },
+          },
+        },
+      })
+    }
   }
 
   const handleOpenWorkspace = async (target: EditorTarget | null) => {
@@ -711,27 +816,37 @@ export function SessionDetail() {
 
   if (isRemote) {
     const remoteTerminalCommands = (['resume', 'fork'] as const).flatMap((commandKind) => {
+      if (!sessionCapabilities.rawTerminal || !sessionCapabilities[commandKind]) return []
       const command = sessionDetail.commands?.[commandKind]
       return command ? [{ commandKind, command }] : []
     })
-    const revisedTargets = new Set(state.editLog.map((entry) => entry.editTarget))
     const closeSession = () => {
       dispatch({ type: 'setSelectedSessionKey', payload: null })
       dispatch({ type: 'setSessionDetail', payload: null })
       dispatch({ type: 'setShowEditLog', payload: false })
-      navigate({ pathname: location.pathname, search: '' }, { replace: true })
+      navigate('/', { replace: true })
     }
-    const toggleHistory = () => {
-      const next = !showEditLog
-      dispatch({ type: 'setShowEditLog', payload: next })
-      if (next && selectedSessionKey) {
-        api.getEditLog(currentPlatform, selectedSessionKey)
-          .then(logs => dispatch({ type: 'setEditLog', payload: logs }))
-          .catch(err => {
-            console.error('Failed to load edit log:', err)
-            dispatch({ type: 'setSessionStatus', payload: { tone: 'error', message: t('session.refreshFailed') } })
-          })
-      }
+    const openMemory = () => {
+      if (!selectedSessionKey) return
+      const params = new URLSearchParams({
+        platform: currentPlatform,
+        session: selectedSessionKey,
+      })
+      navigate(`/memory?${params}`)
+    }
+    const remoteSessionTabs = [...state.workspace.openTabs].sort(
+      (left, right) => right.lastActiveAt - left.lastActiveAt,
+    )
+    const switchSession = (tabId: string) => {
+      const tab = state.workspace.openTabs.find((candidate) => candidate.id === tabId)
+      if (!tab) return
+      dispatch({
+        type: 'workspace',
+        payload: { type: 'activate', payload: { tabId: tab.id } },
+      })
+      setSessionSwitcherOpen(false)
+      const params = new URLSearchParams({ session: tab.sessionKey })
+      navigate(`/${tab.platform}?${params}`)
     }
 
     return (
@@ -758,7 +873,7 @@ export function SessionDetail() {
             <span>{t('session.totalMessages', { count: sessionDetail.blocks.length })}</span>
           </div>
           <div className="remote-detail-actions">
-            {remoteCapabilities?.terminal === true && remoteTerminalCommands.length > 0 && (
+            {remoteTerminalCommands.length > 0 && (
               <div className="remote-terminal-launch" ref={terminalMenuRef}>
                 <button
                   type="button"
@@ -832,11 +947,10 @@ export function SessionDetail() {
             </button>
             <button
               type="button"
-              className={cn('remote-history-button', showEditLog && 'remote-history-button-active')}
-              onClick={toggleHistory}
+              className="remote-history-button"
+              onClick={openMemory}
               title={t('session.editLog')}
               aria-label={t('session.editLog')}
-              aria-pressed={showEditLog}
             >
               <FileText className="size-4" />
               <span className="max-sm:hidden">{t('session.editLog')}</span>
@@ -844,6 +958,38 @@ export function SessionDetail() {
             </button>
           </div>
         </header>
+
+        <div className="remote-session-switcher" ref={sessionSwitcherRef}>
+          <button
+            type="button"
+            onClick={() => setSessionSwitcherOpen((open) => !open)}
+            aria-haspopup="listbox"
+            aria-expanded={sessionSwitcherOpen}
+            disabled={remoteSessionTabs.length < 2}
+          >
+            <Bot className="size-4" />
+            <span>{sessionDetail.aliasTitle || sessionDetail.title || sessionDetail.sessionId}</span>
+            <small>{currentPlatform}</small>
+            <ChevronDown className={cn('size-4', sessionSwitcherOpen && 'rotate-180')} />
+          </button>
+          {sessionSwitcherOpen && (
+            <div className="remote-session-switcher-menu" role="listbox" aria-label={t('remoteSessionSwitcher')}>
+              {remoteSessionTabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="option"
+                  aria-selected={tab.id === state.workspace.activeTabId}
+                  onClick={() => switchSession(tab.id)}
+                >
+                  <span>{tab.title}</span>
+                  <small>{tab.platform}</small>
+                  <i data-status={tab.status} />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="remote-detail-tools">
           <div className="remote-role-segments" aria-label={t('session.totalMessages', { count: sessionDetail.blocks.length })}>
@@ -878,16 +1024,16 @@ export function SessionDetail() {
           </label>
         </div>
 
-        {(isReadOnlyRemote || sessionStatus) && (
+        {(isReadOnlySession || sessionStatus) && (
           <div className="remote-detail-status">
-            {isReadOnlyRemote && <span><Eye className="size-3.5" />{t('remoteReadOnly')}</span>}
+            {isReadOnlySession && <span><Eye className="size-3.5" />{t('remoteReadOnly')}</span>}
             {sessionStatus && (
               <strong data-tone={sessionStatus.tone}>{sessionStatus.message}</strong>
             )}
           </div>
         )}
 
-        <div ref={messageScrollRef} className="remote-message-scroll">
+        <div ref={messageScrollRef} className="remote-message-scroll" onScroll={handleMessageScroll}>
           <div className="relative w-full" style={{ height: `${messageVirtualizer.getTotalSize()}px` }}>
             {virtualItems.map((virtualItem) => {
               const block = filteredBlocks[virtualItem.index]
@@ -906,13 +1052,19 @@ export function SessionDetail() {
                     index={virtualItem.index}
                     onEdit={() => handleEditBlock(block)}
                     onErase={() => handleEraseBlock(block)}
+                    onLocate={() => {
+                      const index = blockIndexById.get(block.id)
+                      if (index !== undefined) scrollToBlockIndex(index)
+                    }}
                     t={t}
                     searchHighlight={searchNeedle}
                     isSearchMatch={matchingBlockIds.includes(block.id)}
                     isCurrentMatch={matchingBlockIds[currentMatchIdx] === block.id}
                     remote
-                    readOnly={isReadOnlyRemote}
+                    canEdit={sessionCapabilities.edit}
+                    canErase={sessionCapabilities.erase}
                     revised={revisedTargets.has(editTarget)}
+                    located={locatedBlockId === block.id}
                   />
                 </div>
               )
@@ -926,7 +1078,7 @@ export function SessionDetail() {
   }
 
   return (
-    <section className="relative z-10 flex min-w-0 flex-1 flex-col bg-gradient-to-br from-background via-background to-muted/10">
+    <section className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col bg-gradient-to-br from-background via-background to-muted/10">
       {detailLoading && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60 backdrop-blur-sm">
           <RefreshCw className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -1115,8 +1267,10 @@ export function SessionDetail() {
             )}
 
             {/* Geek Terminal Dropdown Button */}
-            {(!isRemote || remoteCapabilities?.terminal === true) && (() => {
-              const availableCommands = ['resume', 'fork'].filter(label => sessionDetail.commands?.[label])
+            {sessionCapabilities.rawTerminal && (() => {
+              const availableCommands = (['resume', 'fork'] as const).filter(
+                label => sessionCapabilities[label] && sessionDetail.commands?.[label]
+              )
               if (availableCommands.length === 0) return null
               return (
                 <div className="relative" ref={terminalMenuRef}>
@@ -1329,7 +1483,7 @@ export function SessionDetail() {
                 dispatch({ type: 'setShowEditLog', payload: next })
                 if (next && selectedSessionKey) {
                   api.getEditLog(currentPlatform, selectedSessionKey)
-                    .then(logs => dispatch({ type: 'setEditLog', payload: logs }))
+                    .then(logs => dispatch({ type: 'setEditLogForSession', payload: { platform: currentPlatform, sessionKey: selectedSessionKey, editLog: logs } }))
                     .catch(err => {
                       console.error('Failed to load edit log:', err)
                       dispatch({ type: 'setSessionStatus', payload: { tone: 'error', message: t('session.refreshFailed') } })
@@ -1342,7 +1496,7 @@ export function SessionDetail() {
           </div>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          {isReadOnlyRemote && (
+          {isRemote && isReadOnlySession && (
             <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/20 bg-primary/8 px-3 py-1 text-primary/85">
               <Eye className="size-3.5" />
               {t('remoteReadOnly')}
@@ -1421,7 +1575,7 @@ export function SessionDetail() {
             )}
           </div>
 
-          <div ref={messageScrollRef} className="min-h-0 flex-1 overflow-y-auto">
+          <div ref={messageScrollRef} className="min-h-0 flex-1 overflow-y-auto" onScroll={handleMessageScroll}>
             <div
               className="relative w-full"
               style={{ height: `${messageVirtualizer.getTotalSize()}px` }}
@@ -1443,12 +1597,17 @@ export function SessionDetail() {
                       index={virtualItem.index}
                       onEdit={() => handleEditBlock(block)}
                       onErase={() => handleEraseBlock(block)}
+                      onLocate={() => void handleLocateAudit(block)}
                       onLoadExecutionOutput={isRemote ? undefined : () => handleLoadExecutionOutput(block)}
                       loadingExecutionOutput={Boolean(block.editTarget && loadingExecutionTargets.has(block.editTarget))}
                       t={t}
                       searchHighlight={searchNeedle}
                       isSearchMatch={matchingBlockIds.includes(block.id)}
                       isCurrentMatch={matchingBlockIds[currentMatchIdx] === block.id}
+                      revised={revisedTargets.has(block.editTarget || block.id)}
+                      located={locatedBlockId === block.id}
+                      canEdit={sessionCapabilities.edit}
+                      canErase={sessionCapabilities.erase}
                     />
                   </div>
                 )
@@ -1673,6 +1832,7 @@ const MessageBlock = forwardRef<HTMLDivElement, {
   index: number
   onEdit: () => void
   onErase: () => void
+  onLocate: () => void
   onLoadExecutionOutput?: () => void
   loadingExecutionOutput?: boolean
   t: (key: MessageKey, params?: Record<string, string | number>) => string
@@ -1680,11 +1840,20 @@ const MessageBlock = forwardRef<HTMLDivElement, {
   isSearchMatch?: boolean
   isCurrentMatch?: boolean
   remote?: boolean
-  readOnly?: boolean
+  canEdit?: boolean
+  canErase?: boolean
   revised?: boolean
-}>(function MessageBlock({ block, index, onEdit, onErase, onLoadExecutionOutput, loadingExecutionOutput, t, searchHighlight, isCurrentMatch, remote, readOnly, revised }, ref) {
+  located?: boolean
+}>(function MessageBlock({ block, index, onEdit, onErase, onLocate, onLoadExecutionOutput, loadingExecutionOutput, t, searchHighlight, isCurrentMatch, remote, canEdit = true, canErase = true, revised, located }, ref) {
   const [thinkingExpanded, setThinkingExpanded] = useState(false)
   const [longContentExpanded, setLongContentExpanded] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const copyContent = async () => {
+    await navigator.clipboard.writeText(block.content)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1500)
+  }
 
   const roleConfig = {
     user: {
@@ -1735,7 +1904,7 @@ const MessageBlock = forwardRef<HTMLDivElement, {
           'remote-message',
           `remote-message-${block.role}`,
           revised && 'remote-message-revised',
-          isCurrentMatch && 'remote-message-current-match',
+          (isCurrentMatch || located) && 'remote-message-current-match',
         )}
       >
         <div className="remote-message-rail">
@@ -1748,14 +1917,18 @@ const MessageBlock = forwardRef<HTMLDivElement, {
               <span>#{index + 1}</span>
               {revised && <mark>{t('remoteRevised')}</mark>}
             </div>
-            {!readOnly && block.editable !== false && (
+            {(canEdit || canErase) && block.editable !== false && (
               <div className="remote-message-actions">
-                <button type="button" onClick={onEdit} title={t('session.editThisMessage')} aria-label={t('session.editThisMessage')}>
-                  <Pencil className="size-4" />
-                </button>
-                <button type="button" onClick={onErase} title={t('session.erase')} aria-label={t('session.erase')}>
-                  <Trash2 className="size-4" />
-                </button>
+                {canEdit && (
+                  <button type="button" onClick={onEdit} title={t('session.editThisMessage')} aria-label={t('session.editThisMessage')}>
+                    <Pencil className="size-4" />
+                  </button>
+                )}
+                {canErase && (
+                  <button type="button" onClick={onErase} title={t('session.erase')} aria-label={t('session.erase')}>
+                    <Trash2 className="size-4" />
+                  </button>
+                )}
               </div>
             )}
           </header>
@@ -1804,7 +1977,7 @@ const MessageBlock = forwardRef<HTMLDivElement, {
       className={cn(
         "group animate-in fade-in slide-in-from-bottom-2 duration-300",
         `rounded-r-2xl border-l-4 ${config.borderColor}`,
-        isCurrentMatch && "ring-2 ring-amber-400/50 rounded-2xl"
+        (isCurrentMatch || located) && "ring-2 ring-amber-400/50 rounded-2xl"
       )}
       style={{ animationDelay: `${Math.min(index, 12) * 40}ms` }}
     >
@@ -1818,6 +1991,7 @@ const MessageBlock = forwardRef<HTMLDivElement, {
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className={cn("text-xs font-semibold rounded-lg", config.badgeClass)}>{config.label}</Badge>
                 <span className="text-[10px] text-muted-foreground/50">#{index + 1}</span>
+                {revised && <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-400">{t('remoteRevised')}</Badge>}
               </div>
 
               {isThinking && (
@@ -1874,7 +2048,7 @@ const MessageBlock = forwardRef<HTMLDivElement, {
             )}
 
             <div className="flex items-center gap-2 mt-3 flex-wrap">
-              {block.editable !== false && (
+              {canEdit && block.editable !== false && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -1884,6 +2058,23 @@ const MessageBlock = forwardRef<HTMLDivElement, {
                   <Pencil className="w-3 h-3" />{t('session.editThisMessage')}
                 </Button>
               )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 border-border/50 bg-background/60 text-xs hover:bg-background/80 rounded-xl"
+                onClick={(event) => { event.stopPropagation(); void copyContent() }}
+              >
+                {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                {copied ? t('copied') : t('copy')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 border-border/50 bg-background/60 text-xs hover:bg-background/80 rounded-xl"
+                onClick={(event) => { event.stopPropagation(); onLocate() }}
+              >
+                <LocateFixed className="w-3 h-3" />{t('editLog.locate')}
+              </Button>
               {isKiroExecutionPlaceholder && onLoadExecutionOutput && (
                 <Button
                   variant="outline"
@@ -1896,7 +2087,7 @@ const MessageBlock = forwardRef<HTMLDivElement, {
                   {loadingExecutionOutput ? '加载中' : '加载真实输出'}
                 </Button>
               )}
-              {block.editable !== false && (
+              {canErase && block.editable !== false && (
                 <Button
                   variant="outline"
                   size="sm"

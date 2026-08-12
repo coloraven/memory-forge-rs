@@ -1,6 +1,7 @@
 // ─── Desktop ───
 
 import type { RemoteBootstrap } from "@/features/remote/protocol";
+import type { WorkspaceAction, WorkspaceState } from "@/features/workspace/types";
 
 export type ThemeId = "graphite" | "linen" | "porcelain" | "ocean" | "ember" | "twilight";
 export type LocaleId = "zh-CN" | "en";
@@ -109,6 +110,16 @@ export type TimelineBlock = {
   toolCalls?: ToolCallBlock[];
 };
 
+export type SessionCapabilities = {
+  edit: boolean;
+  erase: boolean;
+  restore: boolean;
+  resume: boolean;
+  fork: boolean;
+  rawTerminal: boolean;
+  liveStructuredEvents: boolean;
+};
+
 export type SessionDetail = {
   platform: string;
   sessionKey: string;
@@ -117,6 +128,7 @@ export type SessionDetail = {
   aliasTitle: string;
   cwd: string;
   commands: Record<string, string>;
+  capabilities?: SessionCapabilities;
   revision: string;
   blocks: TimelineBlock[];
 };
@@ -225,6 +237,7 @@ export type PromptUpdateInput = {
 // ─── App State ───
 
 export type AppState = {
+  workspace: WorkspaceState;
   currentPlatform: string;
   sessions: Session[];
   selectedSessionKey: string | null;
@@ -232,15 +245,18 @@ export type AppState = {
   dashboard: DashboardSummary | null;
   roleFilter: "all" | "user" | "assistant" | "thinking";
   searchQuery: string;
-  editingBlock: { id: string; content: string; role: string; originalContent: string; revision: string } | null;
+  editingBlock: { id: string; platform: string; sessionKey: string; content: string; role: string; originalContent: string; revision: string } | null;
   editLog: EditLogEntry[];
   showEditLog: boolean;
+  locateMessageTarget: { platform: string; sessionKey: string; editTarget: string } | null;
+  inspectMemoryTarget: { platform: string; sessionKey: string; editTarget: string } | null;
   sessionStatus: SessionStatus | null;
   mobileSidebarOpen: boolean;
   showArchived: boolean;
 };
 
 export type AppAction =
+  | { type: "workspace"; payload: WorkspaceAction }
   | { type: "setCurrentPlatform"; payload: string }
   | { type: "setSessions"; payload: Session[] }
   | { type: "updateSession"; payload: { sessionKey: string; updates: Partial<Session> } }
@@ -249,9 +265,15 @@ export type AppAction =
   | { type: "setDashboard"; payload: DashboardSummary | null }
   | { type: "setRoleFilter"; payload: "all" | "user" | "assistant" | "thinking" }
   | { type: "setSearchQuery"; payload: string }
-  | { type: "setEditingBlock"; payload: { id: string; content: string; role: string; originalContent: string; revision: string } | null }
+  | { type: "setEditingBlock"; payload: AppState["editingBlock"] }
   | { type: "setEditLog"; payload: EditLogEntry[] }
+  | {
+      type: "setEditLogForSession";
+      payload: { platform: string; sessionKey: string; editLog: EditLogEntry[] };
+    }
   | { type: "setShowEditLog"; payload: boolean }
+  | { type: "setLocateMessageTarget"; payload: AppState["locateMessageTarget"] }
+  | { type: "setInspectMemoryTarget"; payload: AppState["inspectMemoryTarget"] }
   | { type: "setSessionStatus"; payload: SessionStatus | null }
   | { type: "setMobileSidebarOpen"; payload: boolean }
   | { type: "setShowArchived"; payload: boolean };
