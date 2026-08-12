@@ -421,6 +421,13 @@ export const api = {
     });
   },
 
+  async eraseToolCall(platform: string, toolCallId: string, sessionKey: string) {
+    if (isTauriRuntime()) {
+      return invoke("session_erase_tool_call", { platform, toolCallId, sessionKey });
+    }
+    throw new Error("Tool call erasure is only available in the desktop app");
+  },
+
   async getEditLog(platform: string, sessionKey: string): Promise<EditLogEntry[]> {
     if (isTauriRuntime()) {
       return invoke<EditLogEntry[]>("session_edit_log", { platform, sessionKey });
