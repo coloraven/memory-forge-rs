@@ -107,6 +107,12 @@ export type EditorTarget = {
 export type SessionListResult = {
   total: number;
   items: Session[];
+  searchIndex: {
+    supported: boolean;
+    running: boolean;
+    indexed: number;
+    total: number;
+  };
 };
 
 export type RawJsonlImportPreview = {

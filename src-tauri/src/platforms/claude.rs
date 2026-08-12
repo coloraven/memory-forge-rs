@@ -11,9 +11,10 @@ use crate::database::{
 };
 
 use super::{
-    build_commands, content_entries_to_matches, tool_text_from_str, tool_text_from_value,
-    ContentMatch, PlatformAdapter, SessionDetail, SessionKey, SessionListItem, SessionListResult,
-    TimelineBlock, ToolCallBlock,
+    build_commands, content_entries_to_matches, push_bounded_index_entry, tool_text_from_str,
+    tool_text_from_value, visit_bounded_jsonl_lines, ContentMatch, PlatformAdapter, SessionDetail,
+    SessionKey, SessionListItem, SessionListResult, TimelineBlock, ToolCallBlock,
+    MAX_INDEX_SOURCE_LINE_BYTES,
 };
 
 pub struct ClaudePlatform {
@@ -371,68 +372,77 @@ impl ClaudePlatform {
     }
 
     fn searchable_content_entries(&self, session_key: &str) -> Vec<SessionContentEntry> {
-        let lines = self.read_jsonl(Path::new(session_key));
         let mut entries = Vec::new();
+        let mut indexed_bytes = 0usize;
         let mut msg_index = 0usize;
 
-        for line in &lines {
-            let Some(message) = line.get("message") else {
-                continue;
-            };
-            let role = message.get("role").and_then(Value::as_str).unwrap_or("");
-            if role != "user" && role != "assistant" {
-                continue;
-            }
+        let _ = visit_bounded_jsonl_lines(
+            Path::new(session_key),
+            MAX_INDEX_SOURCE_LINE_BYTES,
+            |raw_line| {
+                let Ok(line) = serde_json::from_slice::<Value>(raw_line) else {
+                    return true;
+                };
+                let Some(message) = line.get("message") else {
+                    return true;
+                };
+                let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+                if role != "user" && role != "assistant" {
+                    return true;
+                }
 
-            let mut texts = Vec::new();
-            if let Some(text) = message.get("content").and_then(Value::as_str) {
-                texts.push(text.to_string());
-            }
-            if let Some(items) = message.get("content").and_then(Value::as_array) {
-                for item in items {
-                    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
-                    match item_type {
-                        "text" => {
-                            if let Some(text) = item.get("text").and_then(Value::as_str) {
+                let mut texts = Vec::new();
+                if let Some(text) = message.get("content").and_then(Value::as_str) {
+                    texts.push(text.to_string());
+                }
+                if let Some(items) = message.get("content").and_then(Value::as_array) {
+                    for item in items {
+                        let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+                        match item_type {
+                            "text" => {
+                                if let Some(text) = item.get("text").and_then(Value::as_str) {
+                                    texts.push(text.to_string());
+                                }
+                            }
+                            "thinking" | "reasoning" => {
+                                let text = item
+                                    .get("thinking")
+                                    .or_else(|| item.get("text"))
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("");
                                 texts.push(text.to_string());
                             }
-                        }
-                        "thinking" | "reasoning" => {
-                            let text = item
-                                .get("thinking")
-                                .or_else(|| item.get("text"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("");
-                            texts.push(text.to_string());
-                        }
-                        "tool_use" => {
-                            if let Some(name) = item.get("name").and_then(Value::as_str) {
-                                texts.push(name.to_string());
+                            "tool_use" => {
+                                if let Some(name) = item.get("name").and_then(Value::as_str) {
+                                    texts.push(name.to_string());
+                                }
+                                if let Some(input) = item.get("input") {
+                                    texts.push(input.to_string());
+                                }
                             }
-                            if let Some(input) = item.get("input") {
-                                texts.push(input.to_string());
-                            }
-                        }
-                        "tool_result" => {
-                            if let Some(content) = item.get("content").and_then(Value::as_str) {
-                                texts.push(content.to_string());
-                            }
-                            if let Some(items) = item.get("content").and_then(Value::as_array) {
-                                for sub in items {
-                                    if let Some(text) = sub.get("text").and_then(Value::as_str) {
-                                        texts.push(text.to_string());
+                            "tool_result" => {
+                                if let Some(content) = item.get("content").and_then(Value::as_str) {
+                                    texts.push(content.to_string());
+                                }
+                                if let Some(items) = item.get("content").and_then(Value::as_array) {
+                                    for sub in items {
+                                        if let Some(text) = sub.get("text").and_then(Value::as_str)
+                                        {
+                                            texts.push(text.to_string());
+                                        }
                                     }
                                 }
                             }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
-            }
 
-            entries.push(SessionContentEntry::any_text(msg_index, role, texts));
-            msg_index += 1;
-        }
+                let entry = SessionContentEntry::any_text(msg_index, role, texts);
+                msg_index += 1;
+                push_bounded_index_entry(&mut entries, &mut indexed_bytes, entry)
+            },
+        );
 
         entries
     }
@@ -890,6 +900,20 @@ impl PlatformAdapter for ClaudePlatform {
         index
             .replace("claude", session_key, &fingerprint, &entries)
             .is_ok()
+    }
+
+    fn has_current_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let (Some(index), Some(fingerprint)) = (
+            index,
+            SessionSummaryCache::fingerprint(Path::new(session_key)),
+        ) else {
+            return false;
+        };
+        index.is_current("claude", session_key, &fingerprint)
     }
 
     fn content_search(&self, session_key: &str, query: &str) -> Vec<ContentMatch> {

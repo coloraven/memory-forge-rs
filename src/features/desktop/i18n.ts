@@ -127,6 +127,8 @@ export type MessageKey =
   // Session
   | "session.sessions"
   | "session.search"
+  | "session.searchIndexing"
+  | "session.searchIndexIncomplete"
   | "session.noSessions"
   | "session.justNow"
   | "session.untitled"
@@ -433,6 +435,8 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     checkFailed: "检查失败",
     "session.sessions": "会话",
     "session.search": "搜索会话...",
+    "session.searchIndexing": "正在后台建立搜索索引（{indexed}/{total}），当前结果可能不完整",
+    "session.searchIndexIncomplete": "搜索索引尚未完成，当前结果可能不完整",
     "session.noSessions": "暂无会话",
     "session.justNow": "刚刚",
     "session.untitled": "无标题",
@@ -737,6 +741,8 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     checkFailed: "Check failed",
     "session.sessions": "Sessions",
     "session.search": "Search sessions...",
+    "session.searchIndexing": "Building search index in background ({indexed}/{total}); results may be incomplete",
+    "session.searchIndexIncomplete": "Search index is not complete; results may be incomplete",
     "session.noSessions": "No sessions",
     "session.justNow": "Just now",
     "session.untitled": "Untitled",

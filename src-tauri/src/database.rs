@@ -1,8 +1,13 @@
 use rusqlite::{params, Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::SystemTime;
+
+const MAX_INDEX_TEXT_BYTES: usize = 8 * 1024;
+const MAX_SESSION_INDEX_BYTES: usize = 256 * 1024;
+const SESSION_CONTENT_INDEX_VERSION: i64 = 2;
 
 const BUILTIN_PROMPT_FENJUE_CTF_NAME: &str = "焚诀·CTF 比赛";
 const BUILTIN_PROMPT_FENJUE_CTF_TAGS: &str = "代码,分析,CTF,焚诀";
@@ -176,6 +181,7 @@ pub struct SessionContentEntry {
 
 impl SessionContentEntry {
     pub fn any_text(match_index: usize, role: impl Into<String>, texts: Vec<String>) -> Self {
+        let texts = compact_index_texts(texts);
         let search_text_lower = texts
             .iter()
             .map(|text| text.to_lowercase())
@@ -190,6 +196,7 @@ impl SessionContentEntry {
     }
 
     pub fn joined_text(match_index: usize, role: impl Into<String>, texts: Vec<String>) -> Self {
+        let texts = compact_index_texts(texts);
         let search_text_lower = texts.join(" ").to_lowercase();
         Self {
             match_index,
@@ -198,6 +205,32 @@ impl SessionContentEntry {
             search_text_lower,
         }
     }
+}
+
+fn compact_index_texts(texts: Vec<String>) -> Vec<String> {
+    texts
+        .into_iter()
+        .filter_map(|text| {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            if trimmed.len() <= MAX_INDEX_TEXT_BYTES {
+                return Some(trimmed.to_string());
+            }
+            let mut end = MAX_INDEX_TEXT_BYTES;
+            while end > 0 && !trimmed.is_char_boundary(end) {
+                end -= 1;
+            }
+            Some(trimmed[..end].to_string())
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IndexedSessionMatch {
+    pub total: usize,
+    pub entries: Vec<SessionContentEntry>,
 }
 
 pub struct SessionContentIndex<'a> {
@@ -224,12 +257,14 @@ impl<'a> SessionContentIndex<'a> {
              WHERE platform = ?1
                AND session_key = ?2
                AND file_size = ?3
-               AND modified_at = ?4",
+               AND modified_at = ?4
+               AND schema_version = ?5",
             params![
                 platform,
                 session_key,
                 fingerprint.file_size,
-                fingerprint.modified_at
+                fingerprint.modified_at,
+                SESSION_CONTENT_INDEX_VERSION
             ],
             |row| row.get::<_, i64>(0),
         )
@@ -257,12 +292,14 @@ impl<'a> SessionContentIndex<'a> {
                  WHERE platform = ?1
                    AND session_key = ?2
                    AND file_size = ?3
-                   AND modified_at = ?4",
+                   AND modified_at = ?4
+                   AND schema_version = ?5",
                 params![
                     platform,
                     session_key,
                     fingerprint.file_size,
-                    fingerprint.modified_at
+                    fingerprint.modified_at,
+                    SESSION_CONTENT_INDEX_VERSION
                 ],
                 |row| row.get(0),
             )
@@ -298,6 +335,61 @@ impl<'a> SessionContentIndex<'a> {
         Some(rows.flatten().collect())
     }
 
+    pub fn search_platform(
+        &self,
+        platform: &str,
+        query: &str,
+        matches_per_session: usize,
+    ) -> Result<HashMap<String, IndexedSessionMatch>, String> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| format!("DB lock error: {e}"))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT content.session_key, content.match_index, content.role,
+                        content.texts_json, content.search_text_lower
+                 FROM session_content_index AS content
+                 JOIN session_content_index_meta AS meta
+                   ON meta.platform = content.platform
+                  AND meta.session_key = content.session_key
+                  AND meta.schema_version = ?3
+                 WHERE content.platform = ?1 AND instr(content.search_text_lower, ?2) > 0
+                 ORDER BY content.session_key, content.id",
+            )
+            .map_err(|e| format!("Prepare platform content search error: {e}"))?;
+        let mut rows = stmt
+            .query(params![platform, needle, SESSION_CONTENT_INDEX_VERSION])
+            .map_err(|e| format!("Query platform content search error: {e}"))?;
+        let mut matches = HashMap::<String, IndexedSessionMatch>::new();
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| format!("Read platform content search row error: {e}"))?
+        {
+            let session_key: String = row.get(0).unwrap_or_default();
+            let item = matches.entry(session_key).or_default();
+            item.total += 1;
+            if item.entries.len() >= matches_per_session {
+                continue;
+            }
+            let raw_index: i64 = row.get(1).unwrap_or_default();
+            let texts_json: String = row.get(3).unwrap_or_default();
+            item.entries.push(SessionContentEntry {
+                match_index: usize::try_from(raw_index).unwrap_or_default(),
+                role: row.get(2).unwrap_or_default(),
+                texts: serde_json::from_str::<Vec<String>>(&texts_json)
+                    .unwrap_or_else(|_| vec![texts_json]),
+                search_text_lower: row.get(4).unwrap_or_default(),
+            });
+        }
+        Ok(matches)
+    }
+
     pub fn replace(
         &self,
         platform: &str,
@@ -328,7 +420,18 @@ impl<'a> SessionContentIndex<'a> {
                 )
                 .map_err(|e| format!("Prepare session content index insert error: {e}"))?;
 
+            let mut indexed_bytes = 0usize;
             for entry in entries {
+                let entry_bytes = entry
+                    .texts
+                    .iter()
+                    .map(String::len)
+                    .sum::<usize>()
+                    .saturating_add(entry.search_text_lower.len());
+                if indexed_bytes.saturating_add(entry_bytes) > MAX_SESSION_INDEX_BYTES {
+                    break;
+                }
+                indexed_bytes = indexed_bytes.saturating_add(entry_bytes);
                 let match_index = i64::try_from(entry.match_index)
                     .map_err(|_| "Session content match index is too large".to_string())?;
                 let texts_json = serde_json::to_string(&entry.texts)
@@ -347,17 +450,19 @@ impl<'a> SessionContentIndex<'a> {
 
         tx.execute(
             "INSERT INTO session_content_index_meta
-                (platform, session_key, file_size, modified_at, indexed_at)
-             VALUES (?1, ?2, ?3, ?4, datetime('now'))
+                (platform, session_key, file_size, modified_at, schema_version, indexed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
              ON CONFLICT(platform, session_key) DO UPDATE SET
                 file_size = excluded.file_size,
                 modified_at = excluded.modified_at,
+                schema_version = excluded.schema_version,
                 indexed_at = datetime('now')",
             params![
                 platform,
                 session_key,
                 fingerprint.file_size,
-                fingerprint.modified_at
+                fingerprint.modified_at,
+                SESSION_CONTENT_INDEX_VERSION
             ],
         )
         .map_err(|e| format!("Upsert session content index metadata error: {e}"))?;
@@ -596,6 +701,7 @@ pub fn init_tables(conn: &Connection) -> SqlResult<()> {
             session_key  TEXT    NOT NULL,
             file_size    INTEGER NOT NULL,
             modified_at  TEXT    NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
             indexed_at   TEXT    NOT NULL DEFAULT (datetime('now')),
             UNIQUE(platform, session_key)
         );
@@ -617,6 +723,10 @@ pub fn init_tables(conn: &Connection) -> SqlResult<()> {
             ON session_content_index(platform, session_key);
         ",
     )?;
+    let _ = conn.execute(
+        "ALTER TABLE session_content_index_meta ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1",
+        [],
+    );
     ensure_builtin_prompts(conn)?;
     Ok(())
 }
@@ -1170,5 +1280,87 @@ mod tests {
             .get_matches("pi", "empty.jsonl", &fingerprint, "anything")
             .expect("valid empty index");
         assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn content_index_compacts_large_unicode_text_and_caps_session_storage() {
+        let conn = Connection::open_in_memory().expect("sqlite memory");
+        init_tables(&conn).expect("init tables");
+        let conn = Mutex::new(conn);
+        let index = SessionContentIndex::new(&conn);
+        let fingerprint = SessionSummaryFingerprint {
+            file_size: 1,
+            modified_at: "bounded".to_string(),
+        };
+        let oversized = "检索内容".repeat(10_000);
+        let entries = (0..100)
+            .map(|match_index| {
+                SessionContentEntry::any_text(match_index, "assistant", vec![oversized.clone()])
+            })
+            .collect::<Vec<_>>();
+
+        index
+            .replace("codex", "bounded.jsonl", &fingerprint, &entries)
+            .expect("replace bounded index");
+
+        let conn = conn.lock().expect("db lock");
+        let stored_bytes: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(length(CAST(texts_json AS BLOB)) + length(CAST(search_text_lower AS BLOB))), 0)
+                 FROM session_content_index WHERE platform = 'codex' AND session_key = 'bounded.jsonl'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stored bytes");
+        assert!(stored_bytes <= (MAX_SESSION_INDEX_BYTES + MAX_INDEX_TEXT_BYTES) as i64);
+    }
+
+    #[test]
+    fn platform_search_groups_matches_and_ignores_legacy_index_rows() {
+        let conn = Connection::open_in_memory().expect("sqlite memory");
+        init_tables(&conn).expect("init tables");
+        let conn = Mutex::new(conn);
+        let index = SessionContentIndex::new(&conn);
+        let fingerprint = SessionSummaryFingerprint {
+            file_size: 42,
+            modified_at: "current".to_string(),
+        };
+        index
+            .replace(
+                "codex",
+                "current.jsonl",
+                &fingerprint,
+                &[
+                    SessionContentEntry::any_text(1, "user", vec!["find needle one".into()]),
+                    SessionContentEntry::any_text(2, "assistant", vec!["find needle two".into()]),
+                ],
+            )
+            .expect("replace current index");
+        {
+            let conn = conn.lock().expect("db lock");
+            conn.execute(
+                "INSERT INTO session_content_index_meta
+                    (platform, session_key, file_size, modified_at, schema_version)
+                 VALUES ('codex', 'legacy.jsonl', 1, 'old', 1)",
+                [],
+            )
+            .expect("legacy meta");
+            conn.execute(
+                "INSERT INTO session_content_index
+                    (platform, session_key, match_index, role, texts_json, search_text_lower)
+                 VALUES ('codex', 'legacy.jsonl', 0, 'user', '[\"legacy needle\"]', 'legacy needle')",
+                [],
+            )
+            .expect("legacy row");
+        }
+
+        let matches = index
+            .search_platform("codex", "needle", 1)
+            .expect("platform search");
+        assert_eq!(matches.len(), 1);
+        let current = matches.get("current.jsonl").expect("current match");
+        assert_eq!(current.total, 2);
+        assert_eq!(current.entries.len(), 1);
+        assert!(!matches.contains_key("legacy.jsonl"));
     }
 }

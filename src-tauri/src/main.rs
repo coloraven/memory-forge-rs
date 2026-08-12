@@ -71,7 +71,7 @@ async fn dashboard_summary(
 }
 
 #[tauri::command]
-fn session_list(
+async fn session_list(
     db: tauri::State<'_, DbState>,
     settings_state: tauri::State<'_, SharedSettingsState>,
     platform: String,
@@ -79,20 +79,27 @@ fn session_list(
     limit: Option<usize>,
     offset: Option<usize>,
     show_archived: Option<bool>,
-) -> Result<platforms::SessionListResult, String> {
+) -> Result<session_service::SessionListResponse, String> {
     let settings = settings_state
         .settings
         .lock()
-        .map_err(|_| "lock error".to_string())?;
-    session_service::session_list(
-        &db,
-        &settings,
-        &platform,
-        query.as_deref(),
-        limit,
-        offset.unwrap_or(0),
-        show_archived.unwrap_or(false),
-    )
+        .map_err(|_| "lock error".to_string())?
+        .clone();
+    let db_path = db.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let db = DbState::new(&db_path)?;
+        session_service::session_list(
+            &db,
+            &settings,
+            &platform,
+            query.as_deref(),
+            limit,
+            offset.unwrap_or(0),
+            show_archived.unwrap_or(false),
+        )
+    })
+    .await
+    .map_err(|e| format!("Task error: {e}"))?
 }
 
 #[tauri::command]

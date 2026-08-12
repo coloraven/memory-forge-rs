@@ -73,11 +73,13 @@ export function SessionList() {
   const sessions = state.sessions
   const selectedSessionKey = state.selectedSessionKey
   const searchQuery = state.searchQuery
+  const [searchInput, setSearchInput] = useState(searchQuery)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshDone, setRefreshDone] = useState(false)
   const [totalCount, setTotalCount] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [searchIndex, setSearchIndex] = useState({ supported: false, running: false, indexed: 0, total: 0 })
   const [favoritesOnly, setFavoritesOnly] = useState(false)
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
@@ -92,7 +94,9 @@ export function SessionList() {
   const { confirm, dialogProps } = useConfirmDialog()
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const requestIdRef = useRef(0)
   const debouncedSetSearch = useCallback((value: string) => {
+    setSearchInput(value)
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
       dispatch({ type: 'setSearchQuery', payload: value })
@@ -100,29 +104,72 @@ export function SessionList() {
   }, [dispatch])
 
   useEffect(() => {
+    setSearchInput(searchQuery)
+  }, [currentPlatform, searchQuery])
+
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+  }, [])
+
+  useEffect(() => {
     if (currentPlatform === 'dashboard' || currentPlatform === 'about' || currentPlatform === 'prompts' || currentPlatform === 'settings') return
+    let cancelled = false
+    const requestId = ++requestIdRef.current
     const loadSessions = async () => {
       setLoading(true)
       try {
         const isSearch = searchQuery.trim().length > 0
         console.time(`[perf] getSessions(${currentPlatform}, search=${isSearch})`)
-        const result = await api.getSessions(currentPlatform, searchQuery, isSearch ? undefined : PAGE_SIZE, 0, showArchived)
+        const result = await api.getSessions(currentPlatform, searchQuery, PAGE_SIZE, 0, showArchived)
         console.timeEnd(`[perf] getSessions(${currentPlatform}, search=${isSearch})`)
+        if (cancelled || requestId !== requestIdRef.current) return
         dispatch({ type: 'setSessions', payload: result.items })
         setTotalCount(result.total)
+        setSearchIndex(result.searchIndex)
         dispatch({ type: 'setEditingBlock', payload: null })
         dispatch({ type: 'setSessionStatus', payload: null })
       } catch (err) {
+        if (cancelled || requestId !== requestIdRef.current) return
         console.error('Failed to load sessions:', err)
         dispatch({ type: 'setSessions', payload: [] })
         setTotalCount(0)
         dispatch({ type: 'setSessionStatus', payload: { tone: 'error', message: t('session.refreshFailed') } })
       } finally {
-        setLoading(false)
+        if (!cancelled && requestId === requestIdRef.current) setLoading(false)
       }
     }
     loadSessions()
+    return () => {
+      cancelled = true
+    }
   }, [currentPlatform, searchQuery, showArchived])
+
+  useEffect(() => {
+    if (!searchQuery.trim() || !searchIndex.running) return
+    let disposed = false
+    let polling = false
+    const poll = async () => {
+      if (polling) return
+      polling = true
+      const requestId = ++requestIdRef.current
+      try {
+        const result = await api.getSessions(currentPlatform, searchQuery, PAGE_SIZE, 0, showArchived)
+        if (disposed || requestId !== requestIdRef.current) return
+        dispatch({ type: 'setSessions', payload: result.items })
+        setTotalCount(result.total)
+        setSearchIndex(result.searchIndex)
+      } catch (err) {
+        console.error('Failed to refresh search index status:', err)
+      } finally {
+        polling = false
+      }
+    }
+    const timer = setInterval(() => void poll(), 1000)
+    return () => {
+      disposed = true
+      clearInterval(timer)
+    }
+  }, [currentPlatform, dispatch, searchIndex.running, searchQuery, showArchived])
 
   useEffect(() => {
     if (!selectedSessionKey || currentPlatform === 'dashboard' || currentPlatform === 'about' || currentPlatform === 'prompts' || currentPlatform === 'settings') return
@@ -150,10 +197,10 @@ export function SessionList() {
     setRefreshing(true)
     setRefreshDone(false)
     try {
-      const isSearch = searchQuery.trim().length > 0
-      const result = await api.getSessions(currentPlatform, searchQuery, isSearch ? undefined : PAGE_SIZE, 0, showArchived)
+      const result = await api.getSessions(currentPlatform, searchQuery, PAGE_SIZE, 0, showArchived)
       dispatch({ type: 'setSessions', payload: result.items })
       setTotalCount(result.total)
+      setSearchIndex(result.searchIndex)
       dispatch({ type: 'setSessionStatus', payload: { tone: 'success', message: t('session.refreshed') } })
       setRefreshDone(true)
       setTimeout(() => setRefreshDone(false), 1500)
@@ -170,6 +217,7 @@ export function SessionList() {
       const result = await api.getSessions(currentPlatform, searchQuery, PAGE_SIZE, sessions.length, showArchived)
       dispatch({ type: 'setSessions', payload: [...sessions, ...result.items] })
       setTotalCount(result.total)
+      setSearchIndex(result.searchIndex)
     } catch (err) {
       console.error('Failed to load more:', err)
     }
@@ -399,7 +447,7 @@ export function SessionList() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/50" />
           <Input
             placeholder={t('session.search')}
-            defaultValue={searchQuery}
+            value={searchInput}
             onChange={(e) => debouncedSetSearch(e.target.value)}
             className="pl-10 bg-muted/20 border-border/40 hover:border-border/80 focus-visible:ring-1 focus-visible:ring-primary/40 focus-visible:border-primary/40 rounded-xl transition-all"
           />
@@ -460,6 +508,13 @@ export function SessionList() {
               <Star className="w-3.5 h-3.5" />
             </Button>
           </div>
+        </div>
+      )}
+      {searchQuery.trim() && searchIndex.supported && searchIndex.indexed < searchIndex.total && (
+        <div className="border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 text-xs text-amber-700 dark:text-amber-300">
+          {searchIndex.running
+            ? t('session.searchIndexing', { indexed: searchIndex.indexed, total: searchIndex.total })
+            : t('session.searchIndexIncomplete')}
         </div>
       )}
       <ScrollArea className="min-h-0 flex-1">

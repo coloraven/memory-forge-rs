@@ -17,6 +17,9 @@ use std::path::PathBuf;
 use crate::database::{SessionContentEntry, SessionContentIndex, SessionSummaryCache};
 use crate::settings::AppSettings;
 
+const MAX_IN_MEMORY_SESSION_INDEX_BYTES: usize = 256 * 1024;
+pub const MAX_INDEX_SOURCE_LINE_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContentMatch {
@@ -140,6 +143,13 @@ pub trait PlatformAdapter: Send + Sync {
     ) -> bool {
         false
     }
+    fn has_current_content_index(
+        &self,
+        _session_key: &str,
+        _index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        false
+    }
     fn content_search(&self, session_key: &str, query: &str) -> Vec<ContentMatch>;
     fn content_search_with_index(
         &self,
@@ -217,6 +227,104 @@ pub fn content_entries_to_matches(
             })
         })
         .collect()
+}
+
+pub fn push_bounded_index_entry(
+    entries: &mut Vec<SessionContentEntry>,
+    indexed_bytes: &mut usize,
+    entry: SessionContentEntry,
+) -> bool {
+    let entry_bytes = entry
+        .texts
+        .iter()
+        .map(String::len)
+        .sum::<usize>()
+        .saturating_add(entry.search_text_lower.len());
+    if indexed_bytes.saturating_add(entry_bytes) > MAX_IN_MEMORY_SESSION_INDEX_BYTES {
+        return false;
+    }
+    *indexed_bytes = indexed_bytes.saturating_add(entry_bytes);
+    entries.push(entry);
+    true
+}
+
+pub fn visit_bounded_jsonl_lines(
+    path: &std::path::Path,
+    max_line_bytes: usize,
+    mut visitor: impl FnMut(&[u8]) -> bool,
+) -> io::Result<()> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    let mut oversized = false;
+
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            if !line.is_empty() && !oversized {
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                let _ = visitor(&line);
+            }
+            return Ok(());
+        }
+
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let take = newline.unwrap_or(buffer.len());
+        if !oversized {
+            if line.len().saturating_add(take) <= max_line_bytes {
+                line.extend_from_slice(&buffer[..take]);
+            } else {
+                oversized = true;
+                line.clear();
+            }
+        }
+        reader.consume(take + usize::from(newline.is_some()));
+
+        if newline.is_some() {
+            if !oversized {
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                if !visitor(&line) {
+                    return Ok(());
+                }
+            }
+            line.clear();
+            oversized = false;
+        }
+    }
+}
+
+#[cfg(test)]
+mod index_reader_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn bounded_jsonl_reader_skips_oversized_lines_and_continues() {
+        let root = std::env::var_os("MEMORY_FORGE_TEST_TMP")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!("memory-forge-index-reader-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("create temp dir");
+        let path = root.join("bounded.jsonl");
+        fs::write(
+            &path,
+            format!("{{\"id\":1}}\n{}\n{{\"id\":2}}\n", "x".repeat(4096)),
+        )
+        .expect("write bounded jsonl");
+        let mut lines = Vec::new();
+        visit_bounded_jsonl_lines(&path, 128, |line| {
+            lines.push(String::from_utf8_lossy(line).into_owned());
+            true
+        })
+        .expect("visit lines");
+        fs::remove_dir_all(&root).ok();
+
+        assert_eq!(lines, vec!["{\"id\":1}", "{\"id\":2}"]);
+    }
 }
 
 pub fn read_head_tail_lines(
