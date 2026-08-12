@@ -132,6 +132,14 @@ pub trait PlatformAdapter: Send + Sync {
         alias_map: &HashMap<String, String>,
     ) -> Result<SessionDetail, String>;
     fn update_message(&self, edit_target: &str, new_content: &str) -> Result<String, String>;
+    fn replace_tool_call(
+        &self,
+        _session_key: &str,
+        _tool_call_id: &str,
+        _record: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        Err("Tool call erasure is not supported for this platform".to_string())
+    }
     fn matches_query(&self, session_key: &str, query: &str) -> bool;
     fn warm_content_index(
         &self,

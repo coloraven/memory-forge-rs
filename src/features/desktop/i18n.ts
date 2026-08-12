@@ -191,6 +191,9 @@ export type MessageKey =
   | "session.includeToolCalls"
   | "session.erase"
   | "session.eraseConfirm"
+  | "session.eraseToolCall"
+  | "session.eraseToolCallConfirm"
+  | "session.toolCallErased"
   | "session.restore"
   | "session.restoreConfirm"
   // Edit Log
@@ -497,6 +500,9 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "session.includeToolCalls": "包含工具调用历史",
     "session.erase": "擦除此消息",
     "session.eraseConfirm": "确定擦除这条消息的内容吗？此操作不可撤销。",
+    "session.eraseToolCall": "擦除工具调用",
+    "session.eraseToolCallConfirm": "确定擦除这条工具调用吗？名称、输入、输出、错误和状态都会从 OpenCode 会话中删除，可通过修改记录复原。",
+    "session.toolCallErased": "工具调用已擦除",
     "session.restore": "复原",
     "session.restoreConfirm": "确定复原这条消息到修改前的内容吗？复原也会记录在修改记录中。",
     "editLog.title": "修改记录",
@@ -801,6 +807,9 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "session.includeToolCalls": "Include tool history",
     "session.erase": "Erase Message",
     "session.eraseConfirm": "Are you sure you want to erase this message? This cannot be undone.",
+    "session.eraseToolCall": "Erase tool call",
+    "session.eraseToolCallConfirm": "Erase this tool call? Its name, input, output, error, and status will be removed from the OpenCode session. You can restore it from the edit log.",
+    "session.toolCallErased": "Tool call erased",
     "session.restore": "Restore",
     "session.restoreConfirm": "Restore this message to its previous content? The restore will also be recorded in the edit log.",
     "editLog.title": "Edit Log",

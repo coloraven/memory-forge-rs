@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { useDesktop } from '@/features/desktop/provider'
 import { api } from '@/features/desktop/api'
 import type { MessageKey } from '@/features/desktop/i18n'
-import type { EditorTarget, TimelineBlock } from '@/features/desktop/types'
+import type { EditorTarget, TimelineBlock, ToolCallBlock } from '@/features/desktop/types'
 import { Clock, Pencil, Check, Copy, User, Bot, Lightbulb, RefreshCw, Terminal, FileText, CheckCircle, Download, Trash2, Search, ChevronUp, ChevronDown, X, Star, Archive, List, Play, FolderOpen, MousePointer2, Code, Sparkles } from 'lucide-react'
 import { ConfirmDialog, useConfirmDialog } from '@/components/ui/confirm-dialog'
 import { save } from '@tauri-apps/plugin-dialog'
@@ -97,6 +97,7 @@ export function SessionDetail() {
   const [tocOpen, setTocOpen] = useState(false)
   const [loadingExecutionTargets, setLoadingExecutionTargets] = useState<Set<string>>(new Set())
   const [loadingAllExecutionOutputs, setLoadingAllExecutionOutputs] = useState(false)
+  const [erasingToolCallId, setErasingToolCallId] = useState<string | null>(null)
   const [includeToolCallsInExport, setIncludeToolCallsInExport] = useState(false)
   const [exportRange, setExportRange] = useState<'all' | 'recent20' | 'recent50' | 'recent100' | 'since'>('all')
   const [exportSinceDate, setExportSinceDate] = useState('')
@@ -340,6 +341,38 @@ export function SessionDetail() {
     } catch (err) {
       console.error('Failed to erase message:', err)
       dispatch({ type: 'setSessionStatus', payload: { tone: 'error', message: t('session.saveFailed') } })
+    }
+  }
+
+  const handleEraseToolCall = async (blockId: string, toolCall: ToolCallBlock) => {
+    if (currentPlatform !== 'opencode') return
+    const sessionKey = sessionDetail.sessionKey
+    if (!await confirm({
+      title: t('session.eraseToolCall'),
+      description: t('session.eraseToolCallConfirm'),
+      variant: 'danger',
+    })) return
+
+    setErasingToolCallId(toolCall.id)
+    try {
+      await api.eraseToolCall(currentPlatform, toolCall.id, sessionKey)
+      if (activeSessionKeyRef.current !== sessionKey) return
+      const updatedBlocks = sessionDetail.blocks.map(block =>
+        block.id === blockId
+          ? { ...block, toolCalls: block.toolCalls?.filter(item => item.id !== toolCall.id) }
+          : block
+      )
+      const logs = await api.getEditLog(currentPlatform, sessionKey)
+      if (activeSessionKeyRef.current !== sessionKey) return
+      dispatch({ type: 'setSessionDetail', payload: { ...sessionDetail, blocks: updatedBlocks } })
+      dispatch({ type: 'setEditLog', payload: logs })
+      dispatch({ type: 'setShowEditLog', payload: true })
+      dispatch({ type: 'setSessionStatus', payload: { tone: 'success', message: t('session.toolCallErased') } })
+    } catch (err) {
+      console.error('Failed to erase tool call:', err)
+      dispatch({ type: 'setSessionStatus', payload: { tone: 'error', message: t('session.saveFailed') } })
+    } finally {
+      setErasingToolCallId(null)
     }
   }
 
@@ -1156,6 +1189,9 @@ export function SessionDetail() {
                       index={virtualItem.index}
                       onEdit={() => handleEditBlock(block)}
                       onErase={() => handleEraseBlock(block)}
+                      onEraseToolCall={(toolCall) => handleEraseToolCall(block.id, toolCall)}
+                      canEraseToolCalls={currentPlatform === 'opencode'}
+                      erasingToolCallId={erasingToolCallId}
                       onLoadExecutionOutput={() => handleLoadExecutionOutput(block)}
                       loadingExecutionOutput={Boolean(block.editTarget && loadingExecutionTargets.has(block.editTarget))}
                       t={t}
@@ -1305,8 +1341,12 @@ function cleanAnsiCodes(text: string): string {
   return text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').replace(/\[[0-9;]+m/g, '')
 }
 
-function ToolCallsConsole({ toolCalls }: {
-  toolCalls: Array<any>;
+function ToolCallsConsole({ toolCalls, canErase, eraseLabel, erasingToolCallId, onErase }: {
+  toolCalls: ToolCallBlock[]
+  canErase: boolean
+  eraseLabel: string
+  erasingToolCallId: string | null
+  onErase: (toolCall: ToolCallBlock) => void
 }) {
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
 
@@ -1339,6 +1379,22 @@ function ToolCallsConsole({ toolCalls }: {
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0 text-[10px] text-quiet">
                   <span className="font-mono text-fine uppercase tracking-wider">{tc.status || 'completed'}</span>
+                  {canErase && (
+                    <button
+                      type="button"
+                      className="inline-flex size-6 items-center justify-center rounded-md text-rose-400 transition-colors hover:bg-rose-500/15 hover:text-rose-300 disabled:cursor-wait disabled:opacity-50"
+                      disabled={erasingToolCallId !== null}
+                      title={eraseLabel}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onErase(tc)
+                      }}
+                    >
+                      {erasingToolCallId === tc.id
+                        ? <RefreshCw className="size-3 animate-spin" />
+                        : <Trash2 className="size-3" />}
+                    </button>
+                  )}
                   {isExpanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
                 </div>
               </div>
@@ -1380,18 +1436,21 @@ const MessageBlock = forwardRef<HTMLDivElement, {
     id: string
     editTarget?: string
     editable?: boolean
-    toolCalls?: Array<any>
+    toolCalls?: ToolCallBlock[]
   }
   index: number
   onEdit: () => void
   onErase: () => void
+  onEraseToolCall: (toolCall: ToolCallBlock) => void
+  canEraseToolCalls: boolean
+  erasingToolCallId: string | null
   onLoadExecutionOutput?: () => void
   loadingExecutionOutput?: boolean
   t: (key: MessageKey, params?: Record<string, string | number>) => string
   searchHighlight?: string
   isSearchMatch?: boolean
   isCurrentMatch?: boolean
-}>(function MessageBlock({ block, index, onEdit, onErase, onLoadExecutionOutput, loadingExecutionOutput, t, searchHighlight, isCurrentMatch }, ref) {
+}>(function MessageBlock({ block, index, onEdit, onErase, onEraseToolCall, canEraseToolCalls, erasingToolCallId, onLoadExecutionOutput, loadingExecutionOutput, t, searchHighlight, isCurrentMatch }, ref) {
   const [thinkingExpanded, setThinkingExpanded] = useState(false)
   const [longContentExpanded, setLongContentExpanded] = useState(false)
 
@@ -1508,7 +1567,13 @@ const MessageBlock = forwardRef<HTMLDivElement, {
 
             {/* Interactive console widget for tool calls if available */}
             {block.toolCalls && block.toolCalls.length > 0 && (
-              <ToolCallsConsole toolCalls={block.toolCalls} />
+              <ToolCallsConsole
+                toolCalls={block.toolCalls}
+                canErase={canEraseToolCalls}
+                eraseLabel={t('session.eraseToolCall')}
+                erasingToolCallId={erasingToolCallId}
+                onErase={onEraseToolCall}
+              />
             )}
 
             <div className="flex items-center gap-2 mt-3 flex-wrap">

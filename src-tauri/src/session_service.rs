@@ -511,6 +511,34 @@ pub fn session_edit_message(
     )
 }
 
+const TOOL_EDIT_TARGET_PREFIX: &str = "tool-call::";
+
+pub fn session_erase_tool_call(
+    db: &DbState,
+    settings: &AppSettings,
+    platform: &str,
+    tool_call_id: &str,
+    session_key: &str,
+) -> Result<(), String> {
+    let adapter = platforms::get_adapter(platform, settings)?;
+    let old_record = adapter
+        .replace_tool_call(session_key, tool_call_id, None)?
+        .ok_or_else(|| "Tool call was not found in this session".to_string())?;
+    let edit_target = format!("{TOOL_EDIT_TARGET_PREFIX}{tool_call_id}");
+    if let Err(error) = database::insert_edit_log(
+        &db.conn,
+        platform,
+        session_key,
+        &edit_target,
+        &old_record,
+        "",
+    ) {
+        let _ = adapter.replace_tool_call(session_key, tool_call_id, Some(&old_record));
+        return Err(error);
+    }
+    Ok(())
+}
+
 pub fn session_edit_log(
     db: &DbState,
     platform: &str,
@@ -545,6 +573,24 @@ pub fn session_restore_message(
 ) -> Result<(), String> {
     let log =
         database::get_edit_log_by_id_for_session(&db.conn, edit_log_id, platform, session_key)?;
+    if let Some(tool_call_id) = log.edit_target.strip_prefix(TOOL_EDIT_TARGET_PREFIX) {
+        let adapter = platforms::get_adapter(platform, settings)?;
+        let restore_record = (!log.old_content.is_empty()).then_some(log.old_content.as_str());
+        let current_record =
+            adapter.replace_tool_call(session_key, tool_call_id, restore_record)?;
+        if let Err(error) = database::insert_edit_log(
+            &db.conn,
+            platform,
+            session_key,
+            &log.edit_target,
+            current_record.as_deref().unwrap_or(""),
+            &log.old_content,
+        ) {
+            let _ = adapter.replace_tool_call(session_key, tool_call_id, current_record.as_deref());
+            return Err(error);
+        }
+        return Ok(());
+    }
     session_edit_message(
         db,
         settings,
@@ -609,6 +655,25 @@ fn path_exists(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::{params, Connection};
+    use serde_json::json;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use uuid::Uuid;
+
+    fn tool_test_paths(label: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let base = std::env::var_os("MEMORY_FORGE_TEST_TMP")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let root = base.join(format!("opencode-service-{label}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("create service test directory");
+        (
+            root.clone(),
+            root.join("memory-forge.db"),
+            root.join("opencode.db"),
+        )
+    }
 
     #[test]
     fn dashboard_platform_names_only_include_visible_supported_platforms() {
@@ -636,5 +701,74 @@ mod tests {
         };
 
         assert!(dashboard_platform_names(&settings).is_empty());
+    }
+
+    #[test]
+    fn opencode_tool_erasure_is_logged_and_restore_is_reversible() {
+        let (root, forge_path, opencode_path) = tool_test_paths("audit");
+        let forge_conn = Connection::open(&forge_path).expect("create Memory Forge database");
+        database::init_tables(&forge_conn).expect("initialize Memory Forge database");
+        let db = DbState {
+            conn: Mutex::new(forge_conn),
+            db_path: forge_path.to_string_lossy().to_string(),
+        };
+
+        let opencode_conn = Connection::open(&opencode_path).expect("create OpenCode database");
+        opencode_conn
+            .execute_batch(
+                "CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL, directory TEXT NOT NULL, parent_id TEXT, time_updated INTEGER NOT NULL);
+                 CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+                 CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+                 INSERT INTO session VALUES ('s1', 'test', 'F:\\work', NULL, 1);
+                 INSERT INTO message VALUES ('m1', 's1', 1, '{\"role\":\"assistant\"}');",
+            )
+            .expect("create OpenCode test schema");
+        let rejected_tool = json!({
+            "type": "tool",
+            "tool": "bash",
+            "state": {
+                "status": "error",
+                "input": { "command": "dangerous-command" },
+                "error": "Permission rejected by user"
+            }
+        })
+        .to_string();
+        opencode_conn
+            .execute(
+                "INSERT INTO part VALUES ('p1', 'm1', 's1', 10, 11, ?1)",
+                params![rejected_tool],
+            )
+            .expect("insert rejected tool");
+        drop(opencode_conn);
+
+        let settings = AppSettings {
+            opencode_path: Some(opencode_path.to_string_lossy().to_string()),
+            ..AppSettings::default()
+        };
+        session_erase_tool_call(&db, &settings, "opencode", "p1", "s1")
+            .expect("erase tool through service");
+        let logs = session_edit_log(&db, "opencode", "s1").expect("read erase log");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].edit_target, "tool-call::p1");
+        assert!(logs[0].old_content.contains("Permission rejected by user"));
+        assert!(logs[0].new_content.is_empty());
+
+        session_restore_message(&db, &settings, "opencode", logs[0].id, "s1")
+            .expect("restore erased tool through edit log");
+        let opencode_conn =
+            Connection::open(&opencode_path).expect("open restored OpenCode database");
+        let restored: String = opencode_conn
+            .query_row("SELECT data FROM part WHERE id = 'p1'", [], |row| {
+                row.get(0)
+            })
+            .expect("read restored tool");
+        assert_eq!(restored, rejected_tool);
+        drop(opencode_conn);
+
+        let logs = session_edit_log(&db, "opencode", "s1").expect("read restore log");
+        assert_eq!(logs.len(), 2);
+        assert!(logs[0].old_content.is_empty());
+        assert!(logs[0].new_content.contains("Permission rejected by user"));
+        fs::remove_dir_all(root).ok();
     }
 }

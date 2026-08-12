@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::{
@@ -11,6 +12,16 @@ use super::{
 
 pub struct OpenCodePlatform {
     db_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct StoredPart {
+    id: String,
+    message_id: String,
+    session_id: String,
+    time_created: i64,
+    time_updated: i64,
+    data: String,
 }
 
 impl OpenCodePlatform {
@@ -327,6 +338,115 @@ impl super::PlatformAdapter for OpenCodePlatform {
         Ok(old_content)
     }
 
+    fn replace_tool_call(
+        &self,
+        session_key: &str,
+        tool_call_id: &str,
+        record: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Cannot start OpenCode transaction: {e}"))?;
+
+        let current = tx
+            .query_row(
+                "SELECT id, message_id, session_id, time_created, time_updated, data
+                 FROM part WHERE id = ?1 AND session_id = ?2",
+                params![tool_call_id, session_key],
+                |row| {
+                    Ok(StoredPart {
+                        id: row.get(0)?,
+                        message_id: row.get(1)?,
+                        session_id: row.get(2)?,
+                        time_created: row.get(3)?,
+                        time_updated: row.get(4)?,
+                        data: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| format!("Cannot read OpenCode tool part: {e}"))?;
+
+        if let Some(part) = &current {
+            ensure_tool_part(&part.data)?;
+        }
+
+        match record {
+            None => {
+                let Some(_) = current.as_ref() else {
+                    return Err("OpenCode tool part was not found in this session".to_string());
+                };
+                tx.execute(
+                    "DELETE FROM part WHERE id = ?1 AND session_id = ?2",
+                    params![tool_call_id, session_key],
+                )
+                .map_err(|e| format!("Cannot erase OpenCode tool part: {e}"))?;
+            }
+            Some(serialized) => {
+                let stored: StoredPart = serde_json::from_str(serialized)
+                    .map_err(|e| format!("Invalid OpenCode tool restore record: {e}"))?;
+                if stored.id != tool_call_id || stored.session_id != session_key {
+                    return Err(
+                        "OpenCode tool restore record does not belong to this session".to_string(),
+                    );
+                }
+                ensure_tool_part(&stored.data)?;
+                let existing_owner: Option<String> = tx
+                    .query_row(
+                        "SELECT session_id FROM part WHERE id = ?1",
+                        params![tool_call_id],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| format!("Cannot validate OpenCode tool owner: {e}"))?;
+                if existing_owner
+                    .as_deref()
+                    .is_some_and(|owner| owner != session_key)
+                {
+                    return Err(
+                        "An OpenCode part with this ID belongs to another session".to_string()
+                    );
+                }
+                let message_belongs_to_session: bool = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM message WHERE id = ?1 AND session_id = ?2)",
+                        params![stored.message_id, session_key],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| format!("Cannot validate OpenCode tool message: {e}"))?;
+                if !message_belongs_to_session {
+                    return Err("The original OpenCode message no longer exists".to_string());
+                }
+                tx.execute(
+                    "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                     ON CONFLICT(id) DO UPDATE SET
+                       message_id = excluded.message_id,
+                       session_id = excluded.session_id,
+                       time_created = excluded.time_created,
+                       time_updated = excluded.time_updated,
+                       data = excluded.data",
+                    params![
+                        stored.id,
+                        stored.message_id,
+                        stored.session_id,
+                        stored.time_created,
+                        stored.time_updated,
+                        stored.data,
+                    ],
+                )
+                .map_err(|e| format!("Cannot restore OpenCode tool part: {e}"))?;
+            }
+        }
+
+        tx.commit()
+            .map_err(|e| format!("Cannot commit OpenCode tool change: {e}"))?;
+        current
+            .map(|part| serde_json::to_string(&part).map_err(|e| e.to_string()))
+            .transpose()
+    }
+
     fn matches_query(&self, session_key: &str, query: &str) -> bool {
         let needle = query.to_lowercase();
         if needle.is_empty() {
@@ -425,6 +545,15 @@ impl super::PlatformAdapter for OpenCodePlatform {
     }
 }
 
+fn ensure_tool_part(data: &str) -> Result<(), String> {
+    let payload: Value =
+        serde_json::from_str(data).map_err(|e| format!("Invalid OpenCode part data: {e}"))?;
+    if payload.get("type").and_then(Value::as_str) != Some("tool") {
+        return Err("The selected OpenCode part is not a tool call".to_string());
+    }
+    Ok(())
+}
+
 fn part_to_block(part_id: &str, data: &Value, message_data: &Value) -> Option<TimelineBlock> {
     let kind = data.get("type").and_then(|v| v.as_str())?;
     let message_role = message_data
@@ -515,6 +644,65 @@ fn tool_part_to_block(part_id: &str, data: &Value) -> Option<ToolCallBlock> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platforms::PlatformAdapter;
+    use std::fs;
+    use std::path::Path;
+    use uuid::Uuid;
+
+    fn test_db(label: &str) -> PathBuf {
+        let base = std::env::var_os("MEMORY_FORGE_TEST_TMP")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let dir = base.join(format!("opencode-tool-{label}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create test directory");
+        let path = dir.join("opencode.db");
+        let conn = rusqlite::Connection::open(&path).expect("create test database");
+        conn.execute_batch(
+            "CREATE TABLE session (
+               id TEXT PRIMARY KEY,
+               title TEXT NOT NULL DEFAULT '',
+               directory TEXT NOT NULL DEFAULT '',
+               parent_id TEXT,
+               time_updated INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE message (
+               id TEXT PRIMARY KEY,
+               session_id TEXT NOT NULL,
+               time_created INTEGER NOT NULL,
+               data TEXT NOT NULL
+             );
+             CREATE TABLE part (
+               id TEXT PRIMARY KEY,
+               message_id TEXT NOT NULL,
+               session_id TEXT NOT NULL,
+               time_created INTEGER NOT NULL,
+               time_updated INTEGER NOT NULL,
+               data TEXT NOT NULL
+             );",
+        )
+        .expect("create OpenCode schema");
+        conn.execute(
+            "INSERT INTO session (id, title, directory, time_updated) VALUES ('s1', 'test', 'F:\\work', 1)",
+            [],
+        )
+        .expect("insert session");
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, data) VALUES ('m1', 's1', 1, '{\"role\":\"assistant\"}')",
+            [],
+        )
+        .expect("insert message");
+        path
+    }
+
+    fn insert_part(path: &Path, id: &str, data: &Value) {
+        let conn = rusqlite::Connection::open(path).expect("open test database");
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+             VALUES (?1, 'm1', 's1', 10, 20, ?2)",
+            params![id, data.to_string()],
+        )
+        .expect("insert part");
+    }
 
     #[test]
     fn tool_part_to_block_extracts_name_input_output_and_status() {
@@ -538,5 +726,85 @@ mod tests {
             Some("{\n  \"command\": \"npm test\"\n}")
         );
         assert_eq!(tool_call.output.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn erases_rejected_tool_part_and_restores_complete_payload() {
+        let path = test_db("erase-restore");
+        let payload = json!({
+            "type": "tool",
+            "callID": "call-1",
+            "tool": "bash",
+            "state": {
+                "status": "error",
+                "input": { "command": "Remove-Item important.txt" },
+                "output": "partial output",
+                "error": "Permission rejected by user",
+                "time": { "start": 10, "end": 11 }
+            },
+            "metadata": { "provider": "test" }
+        });
+        insert_part(&path, "p-tool", &payload);
+        let platform = OpenCodePlatform::new(path.clone());
+
+        let record = platform
+            .replace_tool_call("s1", "p-tool", None)
+            .expect("erase tool")
+            .expect("stored record");
+        let conn = rusqlite::Connection::open(&path).expect("open after erase");
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM part WHERE id = 'p-tool'", [], |row| {
+                row.get(0)
+            })
+            .expect("count erased part");
+        assert_eq!(remaining, 0);
+        drop(conn);
+
+        assert_eq!(
+            platform
+                .replace_tool_call("s1", "p-tool", Some(&record))
+                .expect("restore tool"),
+            None
+        );
+        let conn = rusqlite::Connection::open(&path).expect("open after restore");
+        let restored: (String, i64, i64) = conn
+            .query_row(
+                "SELECT data, time_created, time_updated FROM part WHERE id = 'p-tool'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read restored part");
+        assert_eq!(serde_json::from_str::<Value>(&restored.0).unwrap(), payload);
+        assert_eq!((restored.1, restored.2), (10, 20));
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn refuses_to_erase_non_tool_or_part_from_another_session() {
+        let path = test_db("validation");
+        insert_part(
+            &path,
+            "p-text",
+            &json!({ "type": "text", "text": "keep me" }),
+        );
+        let platform = OpenCodePlatform::new(path.clone());
+
+        assert!(platform
+            .replace_tool_call("s1", "p-text", None)
+            .expect_err("text part must be rejected")
+            .contains("not a tool call"));
+        assert!(platform
+            .replace_tool_call("another-session", "p-text", None)
+            .expect_err("cross-session erase must be rejected")
+            .contains("not found"));
+        let conn = rusqlite::Connection::open(&path).expect("open after rejection");
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM part WHERE id = 'p-text'", [], |row| {
+                row.get(0)
+            })
+            .expect("count preserved part");
+        assert_eq!(remaining, 1);
+        drop(conn);
+        fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 }

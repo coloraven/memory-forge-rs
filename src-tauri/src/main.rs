@@ -245,6 +245,21 @@ fn session_edit_message(
 }
 
 #[tauri::command]
+fn session_erase_tool_call(
+    db: tauri::State<'_, DbState>,
+    settings_state: tauri::State<'_, SharedSettingsState>,
+    platform: String,
+    tool_call_id: String,
+    session_key: String,
+) -> Result<(), String> {
+    let settings = settings_state
+        .settings
+        .lock()
+        .map_err(|_| "lock error".to_string())?;
+    session_service::session_erase_tool_call(&db, &settings, &platform, &tool_call_id, &session_key)
+}
+
+#[tauri::command]
 fn session_edit_log(
     db: tauri::State<'_, DbState>,
     platform: String,
@@ -450,6 +465,7 @@ fn main() {
             session_toggle_flag,
             session_batch_set_flag,
             session_edit_message,
+            session_erase_tool_call,
             session_edit_log,
             session_delete_edit_log,
             session_clear_edit_logs,
