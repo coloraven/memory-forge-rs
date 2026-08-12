@@ -7,7 +7,9 @@ use chrono::{Duration, Local, TimeZone};
 use serde::Serialize;
 
 use crate::database::{self, DbState};
-use crate::platforms::{self, SessionDetail, SessionListItem, SessionListResult};
+use crate::platforms::{
+    self, SessionAgentGroup, SessionDetail, SessionKey, SessionListItem, SessionListResult,
+};
 use crate::settings::AppSettings;
 
 #[derive(Debug, Clone, Serialize)]
@@ -218,8 +220,11 @@ pub fn session_list(
         let needle = query.unwrap().trim().to_lowercase();
         let t2 = Instant::now();
         let mut search_count = 0usize;
-        let filtered: Vec<SessionListItem> = result
-            .items
+        let all_items = apply_flags(result.items, &archived, &favorites, show_archived);
+        let mut matched_keys = HashSet::new();
+        let mut filtered: Vec<SessionListItem> = all_items
+            .iter()
+            .cloned()
             .into_iter()
             .filter_map(|item| {
                 let title_match = [
@@ -234,6 +239,7 @@ pub fn session_list(
 
                 // Skip expensive content_search when title already matches
                 if title_match {
+                    matched_keys.insert(item.session_key.clone());
                     Some(item)
                 } else {
                     search_count += 1;
@@ -246,6 +252,7 @@ pub fn session_list(
                         let mut item = item;
                         item.total_content_matches = content_matches.len();
                         item.content_matches = content_matches;
+                        matched_keys.insert(item.session_key.clone());
                         Some(item)
                     } else {
                         None
@@ -253,7 +260,20 @@ pub fn session_list(
                 }
             })
             .collect();
-        let mut filtered = apply_flags(filtered, &archived, &favorites, show_archived);
+
+        // Keep the complete parent chain for every hit so a matching subagent remains
+        // discoverable even though subagents are hidden from the root list by default.
+        let included_keys = search_result_tree_keys(&all_items, &matched_keys);
+        let hit_items: HashMap<String, SessionListItem> = filtered
+            .drain(..)
+            .map(|item| (item.session_key.clone(), item))
+            .collect();
+        filtered = all_items
+            .into_iter()
+            .filter(|item| included_keys.contains(&item.session_key))
+            .map(|item| hit_items.get(&item.session_key).cloned().unwrap_or(item))
+            .collect();
+        let mut filtered = group_session_items(filtered);
         eprintln!(
             "[perf] session_list({platform}) content_search x{search_count} -> {} hits: {:?}",
             filtered.len(),
@@ -291,11 +311,7 @@ pub fn session_list(
             settings,
             platform,
             &db.db_path,
-            page_result
-                .items
-                .iter()
-                .map(|item| item.session_key.clone())
-                .collect(),
+            session_tree_keys(&page_result.items),
         );
         Ok(page_result)
     }
@@ -327,22 +343,27 @@ fn list_sessions_page(
                 .then_with(|| b.sort_key.cmp(&a.sort_key))
         });
 
-        let total = keys.len();
-        let page_keys: Vec<String> = keys
+        let (root_indices, children) = session_key_graph(&keys);
+        let total = root_indices.len();
+        let page_roots: Vec<usize> = root_indices
             .into_iter()
             .skip(offset.min(total))
             .take(limit.unwrap_or(usize::MAX))
-            .map(|item| item.key)
             .collect();
+        let mut page_indices = Vec::new();
+        for root in page_roots {
+            collect_descendant_indices(root, &children, &mut page_indices);
+        }
 
-        let items = page_keys
+        let items = page_indices
             .into_iter()
-            .filter_map(|key| adapter.session_list_item(&key, aliases, summary_cache))
+            .filter_map(|index| adapter.session_list_item(&keys[index].key, aliases, summary_cache))
             .map(|mut item| {
                 item.favorite = favorites.contains(&item.session_key);
                 item
             })
             .collect();
+        let items = group_session_items(items);
 
         return SessionListResult { total, items };
     }
@@ -367,12 +388,173 @@ fn list_sessions_page(
         .collect();
     items.sort_by(|a, b| b.favorite.cmp(&a.favorite));
 
+    let items = group_session_items(items);
     let total = items.len();
     let start = offset.min(total);
     let end = limit.map(|l| (start + l).min(total)).unwrap_or(total);
     let page = items[start..end].to_vec();
 
     SessionListResult { total, items: page }
+}
+
+fn session_key_graph(keys: &[SessionKey]) -> (Vec<usize>, Vec<Vec<usize>>) {
+    let id_to_index: HashMap<&str, usize> = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| (key.session_id.as_str(), index))
+        .collect();
+    let mut parents: Vec<Option<usize>> = keys
+        .iter()
+        .map(|key| {
+            key.parent_session_id
+                .as_deref()
+                .and_then(|id| id_to_index.get(id).copied())
+        })
+        .collect();
+    break_parent_cycles(&mut parents);
+
+    let mut children = vec![Vec::new(); keys.len()];
+    let mut roots = Vec::new();
+    for (index, parent) in parents.into_iter().enumerate() {
+        if let Some(parent) = parent {
+            children[parent].push(index);
+        } else {
+            roots.push(index);
+        }
+    }
+    (roots, children)
+}
+
+fn break_parent_cycles(parents: &mut [Option<usize>]) {
+    for start in 0..parents.len() {
+        let mut current = Some(start);
+        let mut visited = HashSet::new();
+        while let Some(index) = current {
+            if !visited.insert(index) {
+                parents[index] = None;
+                break;
+            }
+            current = parents[index];
+        }
+    }
+}
+
+fn collect_descendant_indices(index: usize, children: &[Vec<usize>], output: &mut Vec<usize>) {
+    output.push(index);
+    for &child in &children[index] {
+        collect_descendant_indices(child, children, output);
+    }
+}
+
+fn group_session_items(items: Vec<SessionListItem>) -> Vec<SessionListItem> {
+    if items.is_empty() {
+        return items;
+    }
+
+    let keys: Vec<SessionKey> = items
+        .iter()
+        .map(|item| SessionKey {
+            key: item.session_key.clone(),
+            sort_key: 0,
+            session_id: item.session_id.clone(),
+            parent_session_id: item
+                .agent_group
+                .as_ref()
+                .and_then(|group| group.parent_session_id.clone()),
+        })
+        .collect();
+    let (roots, children) = session_key_graph(&keys);
+    let mut slots: Vec<Option<SessionListItem>> = items.into_iter().map(Some).collect();
+
+    fn build(
+        index: usize,
+        children: &[Vec<usize>],
+        slots: &mut [Option<SessionListItem>],
+    ) -> SessionListItem {
+        let mut item = slots[index]
+            .take()
+            .expect("session tree node consumed once");
+        let child_items = children[index]
+            .iter()
+            .map(|&child| build(child, children, slots))
+            .collect::<Vec<_>>();
+        if !child_items.is_empty() {
+            item.agent_group
+                .get_or_insert_with(SessionAgentGroup::default)
+                .children = child_items;
+        }
+        item
+    }
+
+    roots
+        .into_iter()
+        .map(|root| {
+            let mut item = build(root, &children, &mut slots);
+            if item
+                .agent_group
+                .as_ref()
+                .and_then(|group| group.parent_session_id.as_ref())
+                .is_some()
+            {
+                item.agent_group
+                    .get_or_insert_with(SessionAgentGroup::default)
+                    .orphaned = true;
+            }
+            item
+        })
+        .collect()
+}
+
+fn session_tree_keys(items: &[SessionListItem]) -> Vec<String> {
+    fn collect(item: &SessionListItem, output: &mut Vec<String>) {
+        output.push(item.session_key.clone());
+        if let Some(group) = &item.agent_group {
+            for child in &group.children {
+                collect(child, output);
+            }
+        }
+    }
+
+    let mut keys = Vec::new();
+    for item in items {
+        collect(item, &mut keys);
+    }
+    keys
+}
+
+fn search_result_tree_keys(
+    items: &[SessionListItem],
+    matched_keys: &HashSet<String>,
+) -> HashSet<String> {
+    let items_by_id: HashMap<&str, &SessionListItem> = items
+        .iter()
+        .map(|item| (item.session_id.as_str(), item))
+        .collect();
+    let mut included_keys = matched_keys.clone();
+    for item in items
+        .iter()
+        .filter(|item| matched_keys.contains(&item.session_key))
+    {
+        let mut parent_id = item
+            .agent_group
+            .as_ref()
+            .and_then(|group| group.parent_session_id.as_deref());
+        let mut visited = HashSet::new();
+        while let Some(id) = parent_id {
+            if !visited.insert(id) {
+                break;
+            }
+            let Some(parent) = items_by_id.get(id).copied() else {
+                break;
+            };
+            included_keys.insert(parent.session_key.clone());
+            parent_id = parent
+                .agent_group
+                .as_ref()
+                .and_then(|group| group.parent_session_id.as_deref());
+        }
+    }
+    included_keys
 }
 
 fn schedule_content_index_warmup(
@@ -610,6 +792,32 @@ fn path_exists(path: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn session(id: &str, parent: Option<&str>) -> SessionListItem {
+        SessionListItem {
+            platform: "codex".to_string(),
+            session_key: format!("{id}.jsonl"),
+            session_id: id.to_string(),
+            display_title: id.to_string(),
+            alias_title: String::new(),
+            preview: String::new(),
+            updated_at: String::new(),
+            cwd: String::new(),
+            editable: true,
+            content_matches: Vec::new(),
+            total_content_matches: 0,
+            favorite: false,
+            agent_group: parent.map(|parent| SessionAgentGroup {
+                parent_session_id: Some(parent.to_string()),
+                depth: None,
+                nickname: None,
+                role: None,
+                path: None,
+                orphaned: false,
+                children: Vec::new(),
+            }),
+        }
+    }
+
     #[test]
     fn dashboard_platform_names_only_include_visible_supported_platforms() {
         let settings = AppSettings {
@@ -636,5 +844,73 @@ mod tests {
         };
 
         assert!(dashboard_platform_names(&settings).is_empty());
+    }
+
+    #[test]
+    fn groups_multilevel_subagents_under_the_root() {
+        let grouped = group_session_items(vec![
+            session("root", None),
+            session("child", Some("root")),
+            session("grandchild", Some("child")),
+        ]);
+
+        assert_eq!(grouped.len(), 1);
+        let children = &grouped[0].agent_group.as_ref().unwrap().children;
+        assert_eq!(children[0].session_id, "child");
+        assert_eq!(
+            children[0].agent_group.as_ref().unwrap().children[0].session_id,
+            "grandchild"
+        );
+    }
+
+    #[test]
+    fn orphan_and_cycle_sessions_remain_visible_roots() {
+        let grouped = group_session_items(vec![
+            session("orphan", Some("missing")),
+            session("a", Some("b")),
+            session("b", Some("a")),
+        ]);
+
+        assert_eq!(grouped.len(), 2);
+        assert!(grouped.iter().any(|item| {
+            item.session_id == "orphan" && item.agent_group.as_ref().unwrap().orphaned
+        }));
+        assert_eq!(session_tree_keys(&grouped).len(), 3);
+    }
+
+    #[test]
+    fn key_graph_paginates_only_root_sessions() {
+        let keys = vec![
+            SessionKey::standalone("root-a".to_string(), 3),
+            SessionKey {
+                key: "child".to_string(),
+                sort_key: 2,
+                session_id: "child".to_string(),
+                parent_session_id: Some("root-a".to_string()),
+            },
+            SessionKey::standalone("root-b".to_string(), 1),
+        ];
+
+        let (roots, children) = session_key_graph(&keys);
+        assert_eq!(roots, vec![0, 2]);
+        let mut first_page = Vec::new();
+        collect_descendant_indices(roots[0], &children, &mut first_page);
+        assert_eq!(first_page, vec![0, 1]);
+    }
+
+    #[test]
+    fn search_hit_on_subagent_includes_its_parent_chain() {
+        let items = vec![
+            session("root", None),
+            session("child", Some("root")),
+            session("grandchild", Some("child")),
+        ];
+        let matched = HashSet::from(["grandchild.jsonl".to_string()]);
+
+        let included = search_result_tree_keys(&items, &matched);
+
+        assert_eq!(included.len(), 3);
+        assert!(included.contains("root.jsonl"));
+        assert!(included.contains("child.jsonl"));
     }
 }

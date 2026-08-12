@@ -12,8 +12,8 @@ use crate::database::{
 
 use super::{
     build_commands, content_entries_to_matches, tool_text_from_str, tool_text_from_value,
-    ContentMatch, PlatformAdapter, SessionDetail, SessionKey, SessionListItem, SessionListResult,
-    TimelineBlock, ToolCallBlock,
+    ContentMatch, PlatformAdapter, SessionAgentGroup, SessionDetail, SessionKey, SessionListItem,
+    SessionListResult, TimelineBlock, ToolCallBlock,
 };
 
 pub struct CodexPlatform {
@@ -26,6 +26,16 @@ struct SummaryData {
     session_id: String,
     cwd: String,
     preview: String,
+    agent: Option<CodexAgentMetadata>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CodexAgentMetadata {
+    parent_session_id: Option<String>,
+    depth: Option<i32>,
+    nickname: Option<String>,
+    role: Option<String>,
+    path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,12 +70,17 @@ impl CodexPlatform {
             .to_string();
         let mut cwd = String::new();
         let mut preview = String::new();
+        let mut agent = None;
+        let mut saw_session_meta = false;
+        let mut parsed_lines = 0usize;
+        let mut found_session_id = false;
 
         let Ok(file) = File::open(path) else {
             return SummaryData {
                 session_id,
                 cwd,
                 preview,
+                agent,
             };
         };
         let reader = BufReader::new(file);
@@ -79,13 +94,23 @@ impl CodexPlatform {
             let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
                 continue;
             };
+            parsed_lines += 1;
 
             let Some(payload) = parsed.get("payload") else {
                 continue;
             };
 
-            if let Some(id) = payload.get("id").and_then(Value::as_str) {
-                session_id = id.to_string();
+            saw_session_meta |= parsed.get("type").and_then(Value::as_str) == Some("session_meta")
+                || payload.get("type").and_then(Value::as_str) == Some("session_meta");
+            if agent.is_none() {
+                agent = codex_agent_metadata(payload);
+            }
+
+            if !found_session_id {
+                if let Some(id) = payload.get("id").and_then(Value::as_str) {
+                    session_id = id.to_string();
+                    found_session_id = true;
+                }
             }
             if cwd.is_empty() {
                 cwd = payload
@@ -119,7 +144,10 @@ impl CodexPlatform {
                 }
             }
 
-            if !cwd.is_empty() && !preview.is_empty() {
+            if !cwd.is_empty()
+                && !preview.is_empty()
+                && (saw_session_meta || agent.is_some() || parsed_lines >= 256)
+            {
                 break;
             }
         }
@@ -128,6 +156,7 @@ impl CodexPlatform {
             session_id,
             cwd,
             preview,
+            agent,
         }
     }
 
@@ -149,6 +178,7 @@ impl CodexPlatform {
                 session_id: cached.session_id,
                 cwd: cached.cwd,
                 preview: cached.preview,
+                agent: self.scan_agent_metadata(path),
             };
         }
 
@@ -162,6 +192,28 @@ impl CodexPlatform {
         };
         let _ = cache.upsert("codex", session_key, &fingerprint, &cached);
         summary
+    }
+
+    fn scan_agent_metadata(&self, path: &Path) -> Option<CodexAgentMetadata> {
+        let file = File::open(path).ok()?;
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            let Ok(parsed) = serde_json::from_str::<Value>(line.trim()) else {
+                continue;
+            };
+            let payload = parsed.get("payload");
+            if let Some(metadata) = payload.and_then(codex_agent_metadata) {
+                return Some(metadata);
+            }
+            if parsed.get("type").and_then(Value::as_str) == Some("session_meta")
+                || payload
+                    .and_then(|value| value.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("session_meta")
+            {
+                return None;
+            }
+        }
+        None
     }
 
     fn thread_id(&self, lines: &[Value], path: &Path) -> String {
@@ -686,9 +738,16 @@ impl PlatformAdapter for CodexPlatform {
         Some(
             entries
                 .into_iter()
-                .map(|path| SessionKey {
-                    key: encode_path_key(&path),
-                    sort_key: modified_nanos(&path) as i128,
+                .map(|path| {
+                    let summary = self.scan_summary(&path);
+                    SessionKey {
+                        key: encode_path_key(&path),
+                        sort_key: modified_nanos(&path) as i128,
+                        session_id: summary.session_id,
+                        parent_session_id: summary
+                            .agent
+                            .and_then(|metadata| metadata.parent_session_id),
+                    }
                 })
                 .collect(),
         )
@@ -1170,8 +1229,57 @@ impl CodexPlatform {
             content_matches: vec![],
             total_content_matches: 0,
             favorite: false,
+            agent_group: summary.agent.map(|agent| SessionAgentGroup {
+                parent_session_id: agent.parent_session_id,
+                depth: agent.depth,
+                nickname: agent.nickname,
+                role: agent.role,
+                path: agent.path,
+                orphaned: false,
+                children: Vec::new(),
+            }),
         }
     }
+}
+
+fn codex_agent_metadata(payload: &Value) -> Option<CodexAgentMetadata> {
+    let source_spawn = payload
+        .get("source")
+        .and_then(|source| source.get("subagent"))
+        .and_then(|subagent| subagent.get("thread_spawn"));
+    let is_subagent = source_spawn.is_some()
+        || payload
+            .get("parent_thread_id")
+            .and_then(Value::as_str)
+            .is_some()
+        || payload.get("thread_source").and_then(Value::as_str) == Some("subagent");
+    if !is_subagent {
+        return None;
+    }
+
+    let text = |name: &str| {
+        payload
+            .get(name)
+            .and_then(Value::as_str)
+            .or_else(|| {
+                source_spawn
+                    .and_then(|spawn| spawn.get(name))
+                    .and_then(Value::as_str)
+            })
+            .map(ToString::to_string)
+    };
+    let depth = source_spawn
+        .and_then(|spawn| spawn.get("depth"))
+        .and_then(Value::as_i64)
+        .and_then(|value| i32::try_from(value).ok());
+
+    Some(CodexAgentMetadata {
+        parent_session_id: text("parent_thread_id"),
+        depth,
+        nickname: text("agent_nickname"),
+        role: text("agent_role").or_else(|| text("agent_type")),
+        path: text("agent_path"),
+    })
 }
 
 fn path_is_within_root(path: &str, root: &Path) -> bool {
@@ -1200,6 +1308,63 @@ fn normalize_path_for_prefix(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_top_level_subagent_metadata_and_legacy_role_alias() {
+        let metadata = codex_agent_metadata(&json!({
+            "parent_thread_id": "parent",
+            "agent_nickname": "Scout",
+            "agent_type": "explorer",
+            "agent_path": "root/scout",
+            "thread_source": "subagent"
+        }))
+        .unwrap();
+
+        assert_eq!(metadata.parent_session_id.as_deref(), Some("parent"));
+        assert_eq!(metadata.nickname.as_deref(), Some("Scout"));
+        assert_eq!(metadata.role.as_deref(), Some("explorer"));
+        assert_eq!(metadata.path.as_deref(), Some("root/scout"));
+    }
+
+    #[test]
+    fn parses_nested_thread_spawn_metadata() {
+        let metadata = codex_agent_metadata(&json!({
+            "source": { "subagent": { "thread_spawn": {
+                "parent_thread_id": "parent",
+                "depth": 2,
+                "agent_nickname": "Builder",
+                "agent_role": "worker",
+                "agent_path": "root/builder"
+            } } }
+        }))
+        .unwrap();
+
+        assert_eq!(metadata.parent_session_id.as_deref(), Some("parent"));
+        assert_eq!(metadata.depth, Some(2));
+        assert_eq!(metadata.nickname.as_deref(), Some("Builder"));
+        assert_eq!(metadata.role.as_deref(), Some("worker"));
+    }
+
+    #[test]
+    fn agent_metadata_scan_skips_malformed_jsonl_rows() {
+        let root = std::env::var("MEMORY_FORGE_TEST_TMP")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .join(format!("codex-agent-scan-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("create test dir");
+        let path = root.join("session.jsonl");
+        fs::write(
+            &path,
+            "not json\n{\"payload\":{\"parent_thread_id\":\"parent\",\"thread_source\":\"subagent\"}}\n",
+        )
+        .expect("write session");
+
+        let platform = CodexPlatform::new(root.clone(), None);
+        let metadata = platform.scan_agent_metadata(&path).unwrap();
+        fs::remove_dir_all(root).ok();
+
+        assert_eq!(metadata.parent_session_id.as_deref(), Some("parent"));
+    }
 
     #[test]
     fn blocks_merge_function_call_and_output_on_following_agent_message() {

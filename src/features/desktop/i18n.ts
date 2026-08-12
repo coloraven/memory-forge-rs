@@ -131,6 +131,12 @@ export type MessageKey =
   | "session.justNow"
   | "session.untitled"
   | "session.noPreview"
+  | "session.subagents"
+  | "session.expandSubagents"
+  | "session.collapseSubagents"
+  | "session.orphanedSubagent"
+  | "session.agentDepth"
+  | "session.agentRole"
   | "session.selectToView"
   | "session.selectFromList"
   | "session.alias"
@@ -437,6 +443,12 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "session.justNow": "刚刚",
     "session.untitled": "无标题",
     "session.noPreview": "无预览",
+    "session.subagents": "子代理",
+    "session.expandSubagents": "展开子代理",
+    "session.collapseSubagents": "收起子代理",
+    "session.orphanedSubagent": "未关联子代理",
+    "session.agentDepth": "层级",
+    "session.agentRole": "角色",
     "session.selectToView": "选择一个会话查看",
     "session.selectFromList": "从左侧列表选择",
     "session.alias": "别名",
@@ -741,6 +753,12 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "session.justNow": "Just now",
     "session.untitled": "Untitled",
     "session.noPreview": "No preview",
+    "session.subagents": "Subagents",
+    "session.expandSubagents": "Expand subagents",
+    "session.collapseSubagents": "Collapse subagents",
+    "session.orphanedSubagent": "Unlinked subagent",
+    "session.agentDepth": "Depth",
+    "session.agentRole": "Role",
     "session.selectToView": "Select a session to view",
     "session.selectFromList": "Choose from the left panel",
     "session.alias": "Alias",
