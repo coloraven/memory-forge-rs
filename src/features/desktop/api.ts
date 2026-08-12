@@ -309,7 +309,11 @@ export const api = {
     }
     const params = q ? `?q=${encodeURIComponent(q)}` : "";
     const items = await fetchJSON<Session[]>(`${API_BASE}/platforms/${platform}/sessions${params}`);
-    return { total: items.length, items };
+    return {
+      total: items.length,
+      items,
+      searchIndex: { supported: false, running: false, indexed: 0, total: 0 },
+    };
   },
 
   async getSessionDetail(platform: string, sessionKey: string): Promise<SessionDetail> {

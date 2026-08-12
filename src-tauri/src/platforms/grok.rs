@@ -549,6 +549,22 @@ impl PlatformAdapter for GrokPlatform {
             .is_ok()
     }
 
+    fn has_current_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let (Some(index), Some(session_dir)) = (index, self.dir_for_key(session_key)) else {
+            return false;
+        };
+        let Some(fingerprint) =
+            SessionSummaryCache::fingerprint(&session_dir.join("chat_history.jsonl"))
+        else {
+            return false;
+        };
+        index.is_current("grok", session_key, &fingerprint)
+    }
+
     fn content_search(&self, session_key: &str, query: &str) -> Vec<ContentMatch> {
         let needle = query.trim().to_lowercase();
         if needle.is_empty() {

@@ -12,8 +12,8 @@ use crate::database::{
 
 use super::{
     build_commands, content_entries_to_matches, read_head_tail_lines, tool_text_from_str,
-    tool_text_from_value, ContentMatch, PlatformAdapter, SessionDetail, SessionKey, SessionListItem,
-    SessionListResult, TimelineBlock, ToolCallBlock,
+    tool_text_from_value, ContentMatch, PlatformAdapter, SessionDetail, SessionKey,
+    SessionListItem, SessionListResult, TimelineBlock, ToolCallBlock,
 };
 
 pub struct PiPlatform {
@@ -596,6 +596,20 @@ impl PlatformAdapter for PiPlatform {
         index
             .replace("pi", session_key, &fingerprint, &entries)
             .is_ok()
+    }
+
+    fn has_current_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let (Some(index), Some(path)) = (index, self.path_for_key(session_key)) else {
+            return false;
+        };
+        let Some(fingerprint) = SessionSummaryCache::fingerprint(&path) else {
+            return false;
+        };
+        index.is_current("pi", session_key, &fingerprint)
     }
 
     fn content_search(&self, session_key: &str, query: &str) -> Vec<ContentMatch> {
