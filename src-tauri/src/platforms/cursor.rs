@@ -348,6 +348,7 @@ impl PlatformAdapter for CursorPlatform {
                     content_matches: Vec::new(),
                     total_content_matches: 0,
                     favorite: false,
+                    agent_group: None,
                 }
             })
             .collect();

@@ -411,6 +411,7 @@ impl PlatformAdapter for GeminiPlatform {
                     content_matches: vec![],
                     total_content_matches: 0,
                     favorite: false,
+                    agent_group: None,
                 })
             })
             .collect();

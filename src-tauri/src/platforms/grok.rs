@@ -164,6 +164,7 @@ impl GrokPlatform {
             content_matches: Vec::new(),
             total_content_matches: 0,
             favorite: false,
+            agent_group: None,
         })
     }
 
@@ -413,10 +414,10 @@ impl PlatformAdapter for GrokPlatform {
                 .filter_map(|dir| {
                     let key = self.key_for_dir(&dir)?;
                     let summary = Self::read_summary(&dir, false)?;
-                    Some(SessionKey {
+                    Some(SessionKey::standalone(
                         key,
-                        sort_key: timestamp_sort_key(&summary.updated_at),
-                    })
+                        timestamp_sort_key(&summary.updated_at),
+                    ))
                 })
                 .collect(),
         )

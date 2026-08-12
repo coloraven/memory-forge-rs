@@ -135,6 +135,7 @@ impl super::PlatformAdapter for OpenCodePlatform {
                 content_matches: vec![],
                 total_content_matches: 0,
                 favorite: false,
+                agent_group: None,
             });
         }
         SessionListResult { total, items }
@@ -155,10 +156,8 @@ impl super::PlatformAdapter for OpenCodePlatform {
             .ok()?;
         let rows = stmt
             .query_map([], |row| {
-                Ok(SessionKey {
-                    key: row.get(0)?,
-                    sort_key: row.get::<_, i64>(1)? as i128,
-                })
+                let key: String = row.get(0)?;
+                Ok(SessionKey::standalone(key, row.get::<_, i64>(1)? as i128))
             })
             .ok()?;
 
@@ -207,6 +206,7 @@ impl super::PlatformAdapter for OpenCodePlatform {
             content_matches: vec![],
             total_content_matches: 0,
             favorite: false,
+            agent_group: None,
         })
     }
 

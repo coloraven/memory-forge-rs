@@ -28,6 +28,20 @@ pub struct ContentMatch {
     pub role: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAgentGroup {
+    pub parent_session_id: Option<String>,
+    pub depth: Option<i32>,
+    pub nickname: Option<String>,
+    pub role: Option<String>,
+    pub path: Option<String>,
+    #[serde(default)]
+    pub orphaned: bool,
+    #[serde(default)]
+    pub children: Vec<SessionListItem>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionListItem {
@@ -46,6 +60,8 @@ pub struct SessionListItem {
     pub total_content_matches: usize,
     #[serde(default)]
     pub favorite: bool,
+    #[serde(default)]
+    pub agent_group: Option<SessionAgentGroup>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,10 +112,23 @@ pub struct SessionListResult {
     pub items: Vec<SessionListItem>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionKey {
     pub key: String,
     pub sort_key: i128,
+    pub session_id: String,
+    pub parent_session_id: Option<String>,
+}
+
+impl SessionKey {
+    pub fn standalone(key: String, sort_key: i128) -> Self {
+        Self {
+            session_id: key.clone(),
+            key,
+            sort_key,
+            parent_session_id: None,
+        }
+    }
 }
 
 pub trait PlatformAdapter: Send + Sync {

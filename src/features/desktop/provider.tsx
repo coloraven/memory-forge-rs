@@ -17,6 +17,7 @@ import type {
   DesktopSettingsPatch,
   DesktopSnapshot,
   LocaleId,
+  Session,
   ThemeId,
 } from "@/features/desktop/types";
 
@@ -36,6 +37,21 @@ const initialAppState: AppState = {
   showArchived: false,
 };
 
+function updateSessionTree(sessions: Session[], sessionKey: string, updates: Partial<Session>): Session[] {
+  return sessions.map((session) => {
+    const updated = session.sessionKey === sessionKey ? { ...session, ...updates } : session;
+    const children = updated.agentGroup?.children;
+    if (!children?.length) return updated;
+    return {
+      ...updated,
+      agentGroup: {
+        ...updated.agentGroup,
+        children: updateSessionTree(children, sessionKey, updates),
+      },
+    };
+  });
+}
+
 function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case "setCurrentPlatform":
@@ -53,8 +69,10 @@ function appReducer(state: AppState, action: AppAction): AppState {
     case "updateSession":
       return {
         ...state,
-        sessions: state.sessions.map((s) =>
-          s.sessionKey === action.payload.sessionKey ? { ...s, ...action.payload.updates } : s
+        sessions: updateSessionTree(
+          state.sessions,
+          action.payload.sessionKey,
+          action.payload.updates,
         ),
       };
     case "setSelectedSessionKey":

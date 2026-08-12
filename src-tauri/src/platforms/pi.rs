@@ -354,6 +354,7 @@ impl PlatformAdapter for PiPlatform {
                     content_matches: vec![],
                     total_content_matches: 0,
                     favorite: false,
+                    agent_group: None,
                 })
             })
             .collect();
@@ -398,6 +399,7 @@ impl PlatformAdapter for PiPlatform {
                     content_matches: vec![],
                     total_content_matches: 0,
                     favorite: false,
+                    agent_group: None,
                 })
             })
             .collect();
@@ -422,7 +424,7 @@ impl PlatformAdapter for PiPlatform {
                     let key = Self::key_for_path(&path)?;
                     let scan = Self::quick_scan(&path)?;
                     let sort_key = timestamp_sort_key(&scan.updated_at);
-                    Some(SessionKey { key, sort_key })
+                    Some(SessionKey::standalone(key, sort_key))
                 })
                 .collect(),
         )
@@ -451,6 +453,7 @@ impl PlatformAdapter for PiPlatform {
             content_matches: vec![],
             total_content_matches: 0,
             favorite: false,
+            agent_group: None,
         })
     }
 

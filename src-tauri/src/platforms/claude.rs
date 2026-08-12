@@ -215,6 +215,7 @@ impl ClaudePlatform {
                 content_matches: vec![],
                 total_content_matches: 0,
                 favorite: false,
+                agent_group: None,
             });
         }
 
@@ -751,9 +752,8 @@ impl PlatformAdapter for ClaudePlatform {
         Some(
             entries
                 .into_iter()
-                .map(|path| SessionKey {
-                    key: encode_path_key(&path),
-                    sort_key: modified_nanos(&path) as i128,
+                .map(|path| {
+                    SessionKey::standalone(encode_path_key(&path), modified_nanos(&path) as i128)
                 })
                 .collect(),
         )
@@ -788,6 +788,7 @@ impl PlatformAdapter for ClaudePlatform {
             content_matches: vec![],
             total_content_matches: 0,
             favorite: false,
+            agent_group: None,
         })
     }
 

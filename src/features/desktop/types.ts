@@ -75,6 +75,15 @@ export type Session = {
   contentMatches?: ContentMatch[];
   totalContentMatches?: number;
   favorite?: boolean;
+  agentGroup?: {
+    parentSessionId?: string | null;
+    depth?: number | null;
+    nickname?: string | null;
+    role?: string | null;
+    path?: string | null;
+    orphaned?: boolean;
+    children?: Session[];
+  } | null;
 };
 
 export type TimelineBlock = {

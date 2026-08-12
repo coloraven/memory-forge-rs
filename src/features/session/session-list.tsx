@@ -67,6 +67,14 @@ const SESSION_CARD_RENDER_STYLE: CSSProperties = {
   containIntrinsicSize: '160px',
 }
 
+function sessionTreeSome(session: Session, predicate: (item: Session) => boolean): boolean {
+  return predicate(session) || (session.agentGroup?.children ?? []).some(child => sessionTreeSome(child, predicate))
+}
+
+function countSubagents(session: Session): number {
+  return (session.agentGroup?.children ?? []).reduce((count, child) => count + 1 + countSubagents(child), 0)
+}
+
 export function SessionList() {
   const { t, state, dispatch } = useDesktop()
   const currentPlatform = state.currentPlatform
@@ -290,7 +298,9 @@ export function SessionList() {
   }, [selectionMode, exitSelectionMode])
 
   const remaining = totalCount - sessions.length
-  const displaySessions = favoritesOnly ? sessions.filter(s => s.favorite) : sessions
+  const displaySessions = favoritesOnly
+    ? sessions.filter(session => sessionTreeSome(session, item => Boolean(item.favorite)))
+    : sessions
 
   const handleSelectAll = () => {
     setSelectedKeys(new Set(displaySessions.map(s => s.sessionKey)))
@@ -330,6 +340,29 @@ export function SessionList() {
     }
     setSelectedKeys(next)
     setLastClickedIndex(index)
+  }
+
+  const handleOpenSession = (session: Session) => {
+    dispatch({ type: 'setSelectedSessionKey', payload: session.sessionKey })
+    dispatch({ type: 'setEditingBlock', payload: null })
+  }
+
+  const handleToggleFavorite = async (session: Session, e: React.MouseEvent) => {
+    e.stopPropagation()
+    const isNow = await api.toggleFlag(currentPlatform, session.sessionKey, 'favorite')
+    dispatch({ type: 'updateSession', payload: { sessionKey: session.sessionKey, updates: { favorite: isNow } } })
+  }
+
+  const handleToggleArchive = async (session: Session, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!showArchived && !await confirm({ title: t('session.archive'), description: t('session.archiveConfirm') })) return
+    await api.toggleFlag(currentPlatform, session.sessionKey, 'archived')
+    if (selectedSessionKey === session.sessionKey) {
+      dispatch({ type: 'setSelectedSessionKey', payload: null })
+      dispatch({ type: 'setSessionDetail', payload: null })
+    }
+    await handleRefresh()
+    dispatch({ type: 'setSessionStatus', payload: { tone: 'success', message: showArchived ? t('session.unarchive') : t('session.archived') } })
   }
 
   const handleBatchAction = async (flag: 'archived' | 'favorite', set: boolean) => {
@@ -545,30 +578,27 @@ export function SessionList() {
                   key={session.sessionKey}
                   session={session}
                   isSelected={selectedSessionKey === session.sessionKey}
+                  selectedSessionKey={selectedSessionKey}
                   showArchived={showArchived}
                   selectionMode={selectionMode}
                   isMultiSelected={selectedKeys.has(session.sessionKey)}
                   onClick={(e) => handleCardClick(session, index, e)}
-                  onToggleFavorite={async (e) => {
-                    e.stopPropagation()
-                    const isNow = await api.toggleFlag(currentPlatform, session.sessionKey, 'favorite')
-                    dispatch({ type: 'updateSession', payload: { sessionKey: session.sessionKey, updates: { favorite: isNow } } })
-                  }}
-                  onToggleArchive={async (e) => {
-                    e.stopPropagation()
-                    if (!showArchived && !await confirm({ title: t('session.archive'), description: t('session.archiveConfirm') })) return
-                    await api.toggleFlag(currentPlatform, session.sessionKey, 'archived')
-                    dispatch({ type: 'setSessions', payload: sessions.filter(s => s.sessionKey !== session.sessionKey) })
-                    if (selectedSessionKey === session.sessionKey) {
-                      dispatch({ type: 'setSelectedSessionKey', payload: null })
-                      dispatch({ type: 'setSessionDetail', payload: null })
-                    }
-                    dispatch({ type: 'setSessionStatus', payload: { tone: 'success', message: showArchived ? t('session.unarchive') : t('session.archived') } })
-                  }}
+                  onOpenSession={handleOpenSession}
+                  onToggleFavorite={handleToggleFavorite}
+                  onToggleArchive={handleToggleArchive}
                   justNowLabel={t('session.justNow')}
                   untitledLabel={t('session.untitled')}
                   noPreviewLabel={t('session.noPreview')}
                   archiveLabel={showArchived ? t('session.unarchive') : t('session.archive')}
+                  subagentsLabel={t('session.subagents')}
+                  expandSubagentsLabel={t('session.expandSubagents')}
+                  collapseSubagentsLabel={t('session.collapseSubagents')}
+                  orphanedSubagentLabel={t('session.orphanedSubagent')}
+                  agentDepthLabel={t('session.agentDepth')}
+                  agentRoleLabel={t('session.agentRole')}
+                  favoriteLabel={t('session.favorite')}
+                  unfavoriteLabel={t('session.unfavorite')}
+                  autoExpandSubagents={searchQuery.trim().length > 0}
                 />
               ))}
               {remaining > 0 && !favoritesOnly && !selectionMode && (
@@ -651,23 +681,40 @@ export function SessionList() {
   )
 }
 
-function SessionCard({ session, isSelected, showArchived, selectionMode, isMultiSelected, onClick, onToggleFavorite, onToggleArchive, justNowLabel, untitledLabel, noPreviewLabel, archiveLabel }: {
+function SessionCard({ session, isSelected, selectedSessionKey, showArchived, selectionMode, isMultiSelected, onClick, onOpenSession, onToggleFavorite, onToggleArchive, justNowLabel, untitledLabel, noPreviewLabel, archiveLabel, subagentsLabel, expandSubagentsLabel, collapseSubagentsLabel, orphanedSubagentLabel, agentDepthLabel, agentRoleLabel, favoriteLabel, unfavoriteLabel, autoExpandSubagents }: {
   session: Session
   isSelected: boolean
+  selectedSessionKey: string | null
   showArchived: boolean
   selectionMode: boolean
   isMultiSelected: boolean
   onClick: (e: React.MouseEvent) => void
-  onToggleFavorite: (e: React.MouseEvent) => void
-  onToggleArchive: (e: React.MouseEvent) => void
+  onOpenSession: (session: Session) => void
+  onToggleFavorite: (session: Session, e: React.MouseEvent) => void
+  onToggleArchive: (session: Session, e: React.MouseEvent) => void
   justNowLabel: string
   untitledLabel: string
   noPreviewLabel: string
   archiveLabel: string
+  subagentsLabel: string
+  expandSubagentsLabel: string
+  collapseSubagentsLabel: string
+  orphanedSubagentLabel: string
+  agentDepthLabel: string
+  agentRoleLabel: string
+  favoriteLabel: string
+  unfavoriteLabel: string
+  autoExpandSubagents: boolean
 }) {
   const platform = session.platform || 'claude'
   const [copied, setCopied] = useState(false)
   const [matchesExpanded, setMatchesExpanded] = useState(false)
+  const [agentsExpanded, setAgentsExpanded] = useState(autoExpandSubagents)
+  const subagentCount = countSubagents(session)
+
+  useEffect(() => {
+    if (autoExpandSubagents) setAgentsExpanded(true)
+  }, [autoExpandSubagents])
 
   const handleCopyCwd = async (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -799,7 +846,7 @@ function SessionCard({ session, isSelected, showArchived, selectionMode, isMulti
             <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
               <button
                 type="button"
-                onClick={onToggleFavorite}
+                onClick={(e) => onToggleFavorite(session, e)}
                 className={cn(
                   "p-1 rounded-md transition-colors",
                   session.favorite
@@ -811,7 +858,7 @@ function SessionCard({ session, isSelected, showArchived, selectionMode, isMulti
               </button>
               <button
                 type="button"
-                onClick={onToggleArchive}
+                onClick={(e) => onToggleArchive(session, e)}
                 className="p-1 rounded-md text-muted-foreground/40 hover:text-foreground transition-colors"
                 title={archiveLabel}
               >
@@ -842,7 +889,7 @@ function SessionCard({ session, isSelected, showArchived, selectionMode, isMulti
             <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
               <button
                 type="button"
-                onClick={onToggleFavorite}
+                onClick={(e) => onToggleFavorite(session, e)}
                 className={cn(
                   "p-1 rounded-md transition-colors",
                   session.favorite
@@ -854,7 +901,7 @@ function SessionCard({ session, isSelected, showArchived, selectionMode, isMulti
               </button>
               <button
                 type="button"
-                onClick={onToggleArchive}
+                onClick={(e) => onToggleArchive(session, e)}
                 className="p-1 rounded-md text-muted-foreground/45 hover:text-foreground transition-colors"
                 title={archiveLabel}
               >
@@ -862,6 +909,154 @@ function SessionCard({ session, isSelected, showArchived, selectionMode, isMulti
               </button>
             </div>
           )}
+        </div>
+      )}
+      {session.agentGroup?.orphaned && (
+        <div className="mt-2 flex items-center gap-1.5 text-[10px] font-medium text-amber-400/80">
+          <AlertTriangle className="size-3" />
+          {orphanedSubagentLabel}
+        </div>
+      )}
+      {subagentCount > 0 && !selectionMode && (
+        <div className="mt-3 border-t border-border/30 pt-2.5">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setAgentsExpanded(value => !value) }}
+            className="flex w-full cursor-pointer items-center justify-between rounded-lg px-1 py-1 text-[11px] font-medium text-orange-400/80 transition-colors hover:bg-orange-500/5 hover:text-orange-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            title={agentsExpanded ? collapseSubagentsLabel : expandSubagentsLabel}
+            aria-label={agentsExpanded ? collapseSubagentsLabel : expandSubagentsLabel}
+            aria-expanded={agentsExpanded}
+          >
+            <span className="flex items-center gap-1.5">
+              <Bot className="size-3.5" />
+              {subagentsLabel} · {subagentCount}
+            </span>
+            {agentsExpanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+          </button>
+          {agentsExpanded && (
+            <div className="mt-2 space-y-2 border-l border-orange-500/20 pl-2">
+              {(session.agentGroup?.children ?? []).map(child => (
+                <SubagentCard
+                  key={child.sessionKey}
+                  session={child}
+                  selectedSessionKey={selectedSessionKey ?? undefined}
+                  onOpenSession={onOpenSession}
+                  onToggleFavorite={onToggleFavorite}
+                  onToggleArchive={onToggleArchive}
+                  showArchived={showArchived}
+                  untitledLabel={untitledLabel}
+                  noPreviewLabel={noPreviewLabel}
+                  archiveLabel={archiveLabel}
+                  subagentsLabel={subagentsLabel}
+                  orphanedSubagentLabel={orphanedSubagentLabel}
+                  agentDepthLabel={agentDepthLabel}
+                  agentRoleLabel={agentRoleLabel}
+                  favoriteLabel={favoriteLabel}
+                  unfavoriteLabel={unfavoriteLabel}
+                  autoExpand={autoExpandSubagents}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SubagentCard({ session, selectedSessionKey, onOpenSession, onToggleFavorite, onToggleArchive, showArchived, untitledLabel, noPreviewLabel, archiveLabel, subagentsLabel, orphanedSubagentLabel, agentDepthLabel, agentRoleLabel, favoriteLabel, unfavoriteLabel, autoExpand }: {
+  session: Session
+  selectedSessionKey?: string
+  onOpenSession: (session: Session) => void
+  onToggleFavorite: (session: Session, e: React.MouseEvent) => void
+  onToggleArchive: (session: Session, e: React.MouseEvent) => void
+  showArchived: boolean
+  untitledLabel: string
+  noPreviewLabel: string
+  archiveLabel: string
+  subagentsLabel: string
+  orphanedSubagentLabel: string
+  agentDepthLabel: string
+  agentRoleLabel: string
+  favoriteLabel: string
+  unfavoriteLabel: string
+  autoExpand: boolean
+}) {
+  const [expanded, setExpanded] = useState(autoExpand)
+  const children = session.agentGroup?.children ?? []
+  const group = session.agentGroup
+
+  useEffect(() => {
+    if (autoExpand) setExpanded(true)
+  }, [autoExpand])
+
+  return (
+    <div
+      className={cn(
+        "rounded-xl border bg-muted/15 p-2.5 transition-colors hover:border-orange-500/25 hover:bg-muted/25",
+        selectedSessionKey === session.sessionKey ? "border-primary/40 bg-primary/5" : "border-border/30",
+      )}
+    >
+      <button type="button" className="w-full cursor-pointer rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50" onClick={(e) => { e.stopPropagation(); onOpenSession(session) }}>
+        <div className="flex items-center gap-2">
+          <Bot className="size-3.5 shrink-0 text-orange-400/70" />
+          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground/90">
+            {group?.nickname || session.displayTitle || session.sessionId || untitledLabel}
+          </span>
+          {session.favorite && <Star className="size-3 fill-current text-amber-400" />}
+        </div>
+        <div className="mt-1 flex flex-wrap gap-1 text-[9px] text-muted-foreground/60">
+          {group?.role && <span className="rounded bg-muted/50 px-1.5 py-0.5">{agentRoleLabel}: {group.role}</span>}
+          {group?.depth != null && <span className="rounded bg-muted/50 px-1.5 py-0.5">{agentDepthLabel}: {group.depth}</span>}
+          {group?.orphaned && <span className="text-amber-400/80">{orphanedSubagentLabel}</span>}
+        </div>
+        <p className="mt-1.5 line-clamp-2 break-all text-[10px] leading-relaxed text-muted-foreground/65">
+          {session.preview || noPreviewLabel}
+        </p>
+      </button>
+      <div className="mt-1.5 flex items-center justify-end gap-0.5">
+        {children.length > 0 && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setExpanded(value => !value) }}
+            className="mr-auto flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-[9px] text-orange-400/70 hover:bg-orange-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            aria-label={subagentsLabel}
+            aria-expanded={expanded}
+          >
+            {expanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+            {subagentsLabel} · {children.length}
+          </button>
+        )}
+        <button type="button" onClick={(e) => onToggleFavorite(session, e)} className="cursor-pointer rounded p-1 text-muted-foreground/50 hover:text-amber-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50" aria-label={session.favorite ? unfavoriteLabel : favoriteLabel}>
+          <Star className={cn("size-3", session.favorite && "fill-current text-amber-400")} />
+        </button>
+        <button type="button" onClick={(e) => onToggleArchive(session, e)} className="cursor-pointer rounded p-1 text-muted-foreground/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50" title={archiveLabel} aria-label={archiveLabel}>
+          {showArchived ? <ArchiveRestore className="size-3" /> : <Archive className="size-3" />}
+        </button>
+      </div>
+      {expanded && children.length > 0 && (
+        <div className="mt-2 space-y-2 border-l border-orange-500/15 pl-2">
+          {children.map(child => (
+            <SubagentCard
+              key={child.sessionKey}
+              session={child}
+              selectedSessionKey={selectedSessionKey}
+              onOpenSession={onOpenSession}
+              onToggleFavorite={onToggleFavorite}
+              onToggleArchive={onToggleArchive}
+              showArchived={showArchived}
+              untitledLabel={untitledLabel}
+              noPreviewLabel={noPreviewLabel}
+              archiveLabel={archiveLabel}
+              subagentsLabel={subagentsLabel}
+              orphanedSubagentLabel={orphanedSubagentLabel}
+              agentDepthLabel={agentDepthLabel}
+              agentRoleLabel={agentRoleLabel}
+              favoriteLabel={favoriteLabel}
+              unfavoriteLabel={unfavoriteLabel}
+              autoExpand={autoExpand}
+            />
+          ))}
         </div>
       )}
     </div>
