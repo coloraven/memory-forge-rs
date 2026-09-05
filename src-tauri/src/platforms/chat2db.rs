@@ -304,44 +304,81 @@ impl PlatformAdapter for Chat2DbPlatform {
                 _ => continue,
             };
 
-            let tool_calls = parse_reasoning_tools(&message.id, message.reasoning_content.as_ref());
-            let thinking = reasoning_as_thinking(message.reasoning_content.as_ref());
-            if let Some(thinking_text) = thinking {
+            let reasoning_parts =
+                parse_reasoning_timeline(&message.id, message.reasoning_content.as_ref());
+            let mut thinking_index = 0usize;
+            let mut tool_group_index = 0usize;
+            let mut emitted_from_reasoning = false;
+
+            for part in reasoning_parts {
+                match part {
+                    ReasoningPart::Thinking(text) => {
+                        thinking_index += 1;
+                        emitted_from_reasoning = true;
+                        blocks.push(TimelineBlock {
+                            id: format!("{}:thinking:{}", message.id, thinking_index),
+                            role: "thinking".to_string(),
+                            content: text,
+                            editable: false,
+                            edit_target: String::new(),
+                            source_meta: json!({
+                                "messageId": message.id,
+                                "sessionId": session_key,
+                                "flavor": self.flavor.platform_id(),
+                                "field": "reasoningContent",
+                                "part": "reasoning",
+                                "index": thinking_index,
+                            }),
+                            tool_calls: Vec::new(),
+                        });
+                    }
+                    ReasoningPart::Tools(tools) => {
+                        if tools.is_empty() {
+                            continue;
+                        }
+                        tool_group_index += 1;
+                        emitted_from_reasoning = true;
+                        blocks.push(TimelineBlock {
+                            id: format!("{}:tools:{}", message.id, tool_group_index),
+                            role: "assistant".to_string(),
+                            content: String::new(),
+                            editable: false,
+                            edit_target: String::new(),
+                            source_meta: json!({
+                                "messageId": message.id,
+                                "sessionId": session_key,
+                                "flavor": self.flavor.platform_id(),
+                                "field": "reasoningContent",
+                                "part": "tool_result",
+                                "index": tool_group_index,
+                            }),
+                            tool_calls: tools,
+                        });
+                    }
+                }
+            }
+
+            if message.content.trim().is_empty() {
+                if !emitted_from_reasoning {
+                    continue;
+                }
+            } else {
                 blocks.push(TimelineBlock {
-                    id: format!("{}:thinking", message.id),
-                    role: "thinking".to_string(),
-                    content: thinking_text,
-                    editable: false,
-                    edit_target: String::new(),
+                    id: message.id.clone(),
+                    role: role.to_string(),
+                    content: message.content.clone(),
+                    editable: true,
+                    edit_target: format!("{session_key}::{}::content", message.id),
                     source_meta: json!({
                         "messageId": message.id,
                         "sessionId": session_key,
                         "flavor": self.flavor.platform_id(),
-                        "field": "reasoningContent",
+                        "gmtCreate": message.gmt_create,
+                        "userId": message.session_id,
                     }),
                     tool_calls: Vec::new(),
                 });
             }
-
-            if message.content.trim().is_empty() && tool_calls.is_empty() {
-                continue;
-            }
-
-            blocks.push(TimelineBlock {
-                id: message.id.clone(),
-                role: role.to_string(),
-                content: message.content.clone(),
-                editable: true,
-                edit_target: format!("{session_key}::{}::content", message.id),
-                source_meta: json!({
-                    "messageId": message.id,
-                    "sessionId": session_key,
-                    "flavor": self.flavor.platform_id(),
-                    "gmtCreate": message.gmt_create,
-                    "userId": message.session_id,
-                }),
-                tool_calls,
-            });
         }
 
         let alias = alias_map.get(session_key).cloned().unwrap_or_default();
@@ -528,53 +565,135 @@ fn now_gmt_array() -> Value {
 
 fn reasoning_search_text(value: &Value) -> String {
     match value {
-        Value::String(text) => text.clone(),
+        Value::String(text) => {
+            if let Ok(items) = serde_json::from_str::<Vec<Value>>(text.trim()) {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        item.get("content")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                text.clone()
+            }
+        }
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                item.get("content")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
         other => other.to_string(),
     }
 }
 
-fn reasoning_as_thinking(value: Option<&Value>) -> Option<String> {
-    let value = value?;
-    match value {
-        Value::String(text) => {
-            let trimmed = text.trim();
-            if trimmed.is_empty() || trimmed.starts_with('[') {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        }
-        Value::Null => None,
-        other => {
-            // Non-array structured values are uncommon; skip tool arrays.
-            if other.as_array().is_some() {
-                None
-            } else {
-                Some(other.to_string())
-            }
-        }
-    }
+enum ReasoningPart {
+    Thinking(String),
+    Tools(Vec<ToolCallBlock>),
 }
 
-fn parse_reasoning_tools(message_id: &str, value: Option<&Value>) -> Vec<ToolCallBlock> {
+fn parse_reasoning_items(value: Option<&Value>) -> Vec<Value> {
     let Some(value) = value else {
         return Vec::new();
     };
-
-    let items: Vec<Value> = match value {
+    match value {
         Value::Array(arr) => arr.clone(),
         Value::String(text) => {
             let trimmed = text.trim();
-            if !trimmed.starts_with('[') {
+            if trimmed.is_empty() {
                 return Vec::new();
             }
-            serde_json::from_str(trimmed).unwrap_or_default()
+            if trimmed.starts_with('[') {
+                serde_json::from_str(trimmed).unwrap_or_else(|_| {
+                    // Plain text that happens to start with '[' — treat as single reasoning blob.
+                    vec![json!({
+                        "type": "reasoning",
+                        "messageType": "reasoning",
+                        "content": trimmed,
+                    })]
+                })
+            } else {
+                vec![json!({
+                    "type": "reasoning",
+                    "messageType": "reasoning",
+                    "content": trimmed,
+                })]
+            }
         }
-        _ => return Vec::new(),
+        Value::Null => Vec::new(),
+        other => vec![json!({
+            "type": "reasoning",
+            "messageType": "reasoning",
+            "content": other.to_string(),
+        })],
+    }
+}
+
+fn item_is_reasoning(item: &Value) -> bool {
+    let kind = item
+        .get("type")
+        .or_else(|| item.get("messageType"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if kind == "reasoning" || kind == "thinking" {
+        return true;
+    }
+    // Tool results always carry a tool name; reasoning items usually do not.
+    if item.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).is_some() {
+        return false;
+    }
+    kind.is_empty() && item.get("content").and_then(Value::as_str).is_some()
+}
+
+fn parse_reasoning_timeline(message_id: &str, value: Option<&Value>) -> Vec<ReasoningPart> {
+    let items = parse_reasoning_items(value);
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    let mut parts: Vec<ReasoningPart> = Vec::new();
+    let mut thinking_buf = String::new();
+    let mut tools_buf: Vec<ToolCallBlock> = Vec::new();
+    let mut tool_index = 0usize;
+
+    let flush_thinking = |buf: &mut String, parts: &mut Vec<ReasoningPart>| {
+        let text = std::mem::take(buf).trim().to_string();
+        if !text.is_empty() {
+            parts.push(ReasoningPart::Thinking(text));
+        }
+    };
+    let flush_tools = |buf: &mut Vec<ToolCallBlock>, parts: &mut Vec<ReasoningPart>| {
+        if !buf.is_empty() {
+            parts.push(ReasoningPart::Tools(std::mem::take(buf)));
+        }
     };
 
-    let mut tools = Vec::new();
-    for (index, item) in items.into_iter().enumerate() {
+    for item in items {
+        if item_is_reasoning(&item) {
+            flush_tools(&mut tools_buf, &mut parts);
+            let text = item
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            if text.is_empty() {
+                continue;
+            }
+            if !thinking_buf.is_empty() {
+                thinking_buf.push_str("\n\n");
+            }
+            thinking_buf.push_str(text);
+            continue;
+        }
+
+        flush_thinking(&mut thinking_buf, &mut parts);
         let name = item
             .get("name")
             .and_then(Value::as_str)
@@ -589,8 +708,8 @@ fn parse_reasoning_tools(message_id: &str, value: Option<&Value>) -> Vec<ToolCal
             .and_then(Value::as_str)
             .unwrap_or("tool_result")
             .to_string();
-        tools.push(ToolCallBlock {
-            id: format!("{message_id}:tool:{index}"),
+        tools_buf.push(ToolCallBlock {
+            id: format!("{message_id}:tool:{tool_index}"),
             name,
             kind,
             status: "completed".to_string(),
@@ -601,12 +720,16 @@ fn parse_reasoning_tools(message_id: &str, value: Option<&Value>) -> Vec<ToolCal
             ended_at: None,
             source_meta: json!({
                 "messageId": message_id,
-                "toolIndex": index,
+                "toolIndex": tool_index,
                 "source": "reasoningContent",
             }),
         });
+        tool_index += 1;
     }
-    tools
+
+    flush_thinking(&mut thinking_buf, &mut parts);
+    flush_tools(&mut tools_buf, &mut parts);
+    parts
 }
 
 #[cfg(test)]
@@ -624,19 +747,72 @@ mod tests {
         let raw = json!(
             "[{\"type\":\"tool_result\",\"name\":\"list_all_tables\",\"content\":\"a [TABLE]\"}]"
         );
-        let tools = parse_reasoning_tools("m1", Some(&raw));
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].name, "list_all_tables");
-        assert_eq!(tools[0].output.as_deref(), Some("a [TABLE]"));
+        let parts = parse_reasoning_timeline("m1", Some(&raw));
+        assert_eq!(parts.len(), 1);
+        match &parts[0] {
+            ReasoningPart::Tools(tools) => {
+                assert_eq!(tools.len(), 1);
+                assert_eq!(tools[0].name, "list_all_tables");
+                assert_eq!(tools[0].output.as_deref(), Some("a [TABLE]"));
+            }
+            ReasoningPart::Thinking(_) => panic!("expected tools"),
+        }
     }
 
     #[test]
     fn plain_reasoning_text_becomes_thinking() {
         let value = json!("planning next SQL");
-        assert_eq!(
-            reasoning_as_thinking(Some(&value)).as_deref(),
-            Some("planning next SQL")
-        );
-        assert!(parse_reasoning_tools("m1", Some(&value)).is_empty());
+        let parts = parse_reasoning_timeline("m1", Some(&value));
+        assert_eq!(parts.len(), 1);
+        match &parts[0] {
+            ReasoningPart::Thinking(text) => assert_eq!(text, "planning next SQL"),
+            ReasoningPart::Tools(_) => panic!("expected thinking"),
+        }
+    }
+
+    #[test]
+    fn pro_interleaved_reasoning_and_tools() {
+        let raw = json!([
+            {
+                "type": "reasoning",
+                "messageType": "reasoning",
+                "content": "first thought"
+            },
+            {
+                "type": "tool_result",
+                "messageType": "tool_result",
+                "name": "execute_sql",
+                "content": "CORRUPT"
+            },
+            {
+                "type": "reasoning",
+                "messageType": "reasoning",
+                "content": "second thought"
+            },
+            {
+                "type": "tool_result",
+                "name": "list_all_datasources",
+                "content": "id=1"
+            }
+        ]);
+        let parts = parse_reasoning_timeline("m1", Some(&raw));
+        assert_eq!(parts.len(), 4);
+        assert!(matches!(&parts[0], ReasoningPart::Thinking(t) if t == "first thought"));
+        assert!(matches!(&parts[1], ReasoningPart::Tools(t) if t.len() == 1 && t[0].name == "execute_sql"));
+        assert!(matches!(&parts[2], ReasoningPart::Thinking(t) if t == "second thought"));
+        assert!(matches!(&parts[3], ReasoningPart::Tools(t) if t.len() == 1 && t[0].name == "list_all_datasources"));
+    }
+
+    #[test]
+    fn consecutive_reasoning_merged() {
+        let raw = json!([
+            {"type":"reasoning","content":"a"},
+            {"type":"reasoning","content":"b"},
+            {"type":"tool_result","name":"t","content":"ok"}
+        ]);
+        let parts = parse_reasoning_timeline("m1", Some(&raw));
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], ReasoningPart::Thinking(t) if t == "a\n\nb"));
+        assert!(matches!(&parts[1], ReasoningPart::Tools(t) if t.len() == 1));
     }
 }
