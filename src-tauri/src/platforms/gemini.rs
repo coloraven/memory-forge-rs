@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::database::{SessionContentEntry, SessionContentIndex, SessionSummaryCache};
+
 use super::{
-    extract_snippet, ContentMatch, PlatformAdapter, SessionDetail, SessionListItem,
-    SessionListResult, TimelineBlock,
+    content_entries_to_matches, push_bounded_index_entry, ContentMatch, PlatformAdapter,
+    SessionDetail, SessionKey, SessionListItem, SessionListResult, TimelineBlock,
 };
 
 pub struct GeminiPlatform {
@@ -124,6 +126,31 @@ impl GeminiPlatform {
         } else {
             serde_json::from_str(&raw).map_err(|e| format!("cannot parse session: {e}"))
         }
+    }
+
+    fn searchable_content_entries(&self, session_key: &str) -> Vec<SessionContentEntry> {
+        let Some(path) = self.key_to_path(session_key) else {
+            return Vec::new();
+        };
+        let Ok(session) = Self::read_session_file(&path) else {
+            return Vec::new();
+        };
+
+        let mut entries = Vec::new();
+        let mut indexed_bytes = 0usize;
+        for (idx, msg) in session.messages.iter().enumerate() {
+            let role = match msg.msg_type.as_str() {
+                "user" => "user",
+                "gemini" => "assistant",
+                _ => continue,
+            };
+            let text = message_text(msg);
+            let entry = SessionContentEntry::any_text(idx, role, vec![text]);
+            if !push_bounded_index_entry(&mut entries, &mut indexed_bytes, entry) {
+                break;
+            }
+        }
+        entries
     }
 }
 
@@ -428,6 +455,22 @@ impl PlatformAdapter for GeminiPlatform {
         SessionListResult { total, items }
     }
 
+    fn list_session_keys(&self) -> Option<Vec<SessionKey>> {
+        Some(
+            self.collect_session_files()
+                .into_iter()
+                .filter_map(|(project_name, source, path)| {
+                    let stem = path.file_stem()?.to_str()?.to_string();
+                    let session_key = Self::build_key(&project_name, &source, &stem);
+                    let sort_key = SessionSummaryCache::fingerprint(&path)
+                        .map(|fp| fp.modified_at.parse::<i128>().unwrap_or(0))
+                        .unwrap_or(0);
+                    Some(SessionKey::standalone(session_key, sort_key))
+                })
+                .collect(),
+        )
+    }
+
     fn get_session_detail(
         &self,
         session_key: &str,
@@ -650,35 +693,76 @@ impl PlatformAdapter for GeminiPlatform {
         raw.to_lowercase().contains(&lower)
     }
 
-    fn content_search(&self, session_key: &str, query: &str) -> Vec<ContentMatch> {
+    fn warm_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let Some(index) = index else {
+            return false;
+        };
         let Some(path) = self.key_to_path(session_key) else {
-            return vec![];
+            return false;
         };
-        let Ok(session) = Self::read_session_file(&path) else {
-            return vec![];
+        let Some(fingerprint) = SessionSummaryCache::fingerprint(&path) else {
+            return false;
         };
+        if index.is_current("gemini", session_key, &fingerprint) {
+            return true;
+        }
+        let entries = self.searchable_content_entries(session_key);
+        index
+            .replace("gemini", session_key, &fingerprint, &entries)
+            .is_ok()
+    }
 
-        let lower = query.to_lowercase();
-        session
-            .messages
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, msg)| {
-                let text = message_text(msg);
-                if !text.to_lowercase().contains(&lower) {
-                    return None;
-                }
-                let role = match msg.msg_type.as_str() {
-                    "user" => "user",
-                    "gemini" => "assistant",
-                    _ => return None,
-                };
-                Some(ContentMatch {
-                    snippet: extract_snippet(&text, &lower),
-                    match_index: idx,
-                    role: role.to_string(),
-                })
-            })
-            .collect()
+    fn has_current_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let (Some(index), Some(path)) = (index, self.key_to_path(session_key)) else {
+            return false;
+        };
+        let Some(fingerprint) = SessionSummaryCache::fingerprint(&path) else {
+            return false;
+        };
+        index.is_current("gemini", session_key, &fingerprint)
+    }
+
+    fn content_search(&self, session_key: &str, query: &str) -> Vec<ContentMatch> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        content_entries_to_matches(self.searchable_content_entries(session_key), &needle)
+    }
+
+    fn content_search_with_index(
+        &self,
+        session_key: &str,
+        query: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> Vec<ContentMatch> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let Some(index) = index else {
+            return self.content_search(session_key, &needle);
+        };
+        let Some(path) = self.key_to_path(session_key) else {
+            return Vec::new();
+        };
+        let Some(fingerprint) = SessionSummaryCache::fingerprint(&path) else {
+            return self.content_search(session_key, &needle);
+        };
+        if let Some(entries) = index.get_matches("gemini", session_key, &fingerprint, &needle) {
+            return content_entries_to_matches(entries, &needle);
+        }
+        let entries = self.searchable_content_entries(session_key);
+        let matches = content_entries_to_matches(entries.clone(), &needle);
+        let _ = index.replace("gemini", session_key, &fingerprint, &entries);
+        matches
     }
 }

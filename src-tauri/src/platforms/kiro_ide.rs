@@ -8,9 +8,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::{
-    build_commands, extract_snippet, ContentMatch, PlatformAdapter, SessionDetail, SessionListItem,
-    SessionListResult, TimelineBlock,
+    build_commands, content_entries_to_matches, push_bounded_index_entry, ContentMatch,
+    PlatformAdapter, SessionDetail, SessionKey, SessionListItem, SessionListResult, TimelineBlock,
 };
+
+use crate::database::{SessionContentEntry, SessionContentIndex, SessionSummaryCache};
 
 const EXECUTION_LOG_SCAN_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const EXECUTION_LOG_DEEP_SCAN_MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -543,6 +545,41 @@ impl KiroIdePlatform {
         }
         Some((workspace_key, session_id))
     }
+
+    fn searchable_content_entries(&self, session_key: &str) -> Vec<SessionContentEntry> {
+        let Some((workspace_key, session_id)) = Self::parse_session_key(session_key) else {
+            return Vec::new();
+        };
+        let Ok(session) = self.read_session_json(workspace_key, session_id) else {
+            return Vec::new();
+        };
+        let Some(history) = session.get("history").and_then(Value::as_array) else {
+            return Vec::new();
+        };
+
+        let mut entries = Vec::new();
+        let mut indexed_bytes = 0usize;
+        let mut match_index = 0usize;
+        for entry in history {
+            let Some(message) = entry.get("message") else {
+                continue;
+            };
+            let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+            if role != "user" && role != "assistant" {
+                continue;
+            }
+            let text = message
+                .get("content")
+                .map(extract_message_text)
+                .unwrap_or_default();
+            let entry = SessionContentEntry::any_text(match_index, role, vec![text]);
+            if !push_bounded_index_entry(&mut entries, &mut indexed_bytes, entry) {
+                break;
+            }
+            match_index += 1;
+        }
+        entries
+    }
 }
 
 impl PlatformAdapter for KiroIdePlatform {
@@ -600,6 +637,24 @@ impl PlatformAdapter for KiroIdePlatform {
             .take(limit.unwrap_or(usize::MAX))
             .collect();
         SessionListResult { total, items }
+    }
+
+    fn list_session_keys(&self) -> Option<Vec<SessionKey>> {
+        if !self.workspace_sessions_dir().exists() {
+            return Some(Vec::new());
+        }
+        let mut keys = Vec::new();
+        for workspace_key in self.collect_workspace_keys() {
+            for entry in self.read_index(&workspace_key) {
+                let session_key = format!("{workspace_key}::{}", entry.session_id);
+                let path = self.session_path(&workspace_key, &entry.session_id);
+                let sort_key = SessionSummaryCache::fingerprint(&path)
+                    .map(|fp| fp.modified_at.parse::<i128>().unwrap_or(0))
+                    .unwrap_or(0);
+                keys.push(SessionKey::standalone(session_key, sort_key));
+            }
+        }
+        Some(keys)
     }
 
     fn get_session_detail(
@@ -788,44 +843,81 @@ impl PlatformAdapter for KiroIdePlatform {
         !self.content_search(session_key, query).is_empty()
     }
 
+    fn warm_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let Some(index) = index else {
+            return false;
+        };
+        let Some((workspace_key, session_id)) = Self::parse_session_key(session_key) else {
+            return false;
+        };
+        let path = self.session_path(workspace_key, session_id);
+        let Some(fingerprint) = SessionSummaryCache::fingerprint(&path) else {
+            return false;
+        };
+        if index.is_current("kiro-ide", session_key, &fingerprint) {
+            return true;
+        }
+        let entries = self.searchable_content_entries(session_key);
+        index
+            .replace("kiro-ide", session_key, &fingerprint, &entries)
+            .is_ok()
+    }
+
+    fn has_current_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let Some((workspace_key, session_id)) = Self::parse_session_key(session_key) else {
+            return false;
+        };
+        let path = self.session_path(workspace_key, session_id);
+        let (Some(index), Some(fingerprint)) =
+            (index, SessionSummaryCache::fingerprint(&path))
+        else {
+            return false;
+        };
+        index.is_current("kiro-ide", session_key, &fingerprint)
+    }
+
     fn content_search(&self, session_key: &str, query: &str) -> Vec<ContentMatch> {
         let needle = query.trim().to_lowercase();
         if needle.is_empty() {
-            return vec![];
+            return Vec::new();
         }
-        let Some((workspace_key, session_id)) = Self::parse_session_key(session_key) else {
-            return vec![];
-        };
-        let Ok(session) = self.read_session_json(workspace_key, session_id) else {
-            return vec![];
-        };
+        content_entries_to_matches(self.searchable_content_entries(session_key), &needle)
+    }
 
-        let mut matches = Vec::new();
-        let Some(history) = session.get("history").and_then(Value::as_array) else {
-            return matches;
-        };
-        let mut match_index = 0usize;
-        for entry in history {
-            let Some(message) = entry.get("message") else {
-                continue;
-            };
-            let role = message.get("role").and_then(Value::as_str).unwrap_or("");
-            if role != "user" && role != "assistant" {
-                continue;
-            }
-            let text = message
-                .get("content")
-                .map(extract_message_text)
-                .unwrap_or_default();
-            if text.to_lowercase().contains(&needle) {
-                matches.push(ContentMatch {
-                    snippet: extract_snippet(&text, &needle),
-                    match_index,
-                    role: role.to_string(),
-                });
-            }
-            match_index += 1;
+    fn content_search_with_index(
+        &self,
+        session_key: &str,
+        query: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> Vec<ContentMatch> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
         }
+        let Some(index) = index else {
+            return self.content_search(session_key, &needle);
+        };
+        let Some((workspace_key, session_id)) = Self::parse_session_key(session_key) else {
+            return Vec::new();
+        };
+        let path = self.session_path(workspace_key, session_id);
+        let Some(fingerprint) = SessionSummaryCache::fingerprint(&path) else {
+            return self.content_search(session_key, &needle);
+        };
+        if let Some(entries) = index.get_matches("kiro-ide", session_key, &fingerprint, &needle) {
+            return content_entries_to_matches(entries, &needle);
+        }
+        let entries = self.searchable_content_entries(session_key);
+        let matches = content_entries_to_matches(entries.clone(), &needle);
+        let _ = index.replace("kiro-ide", session_key, &fingerprint, &entries);
         matches
     }
 

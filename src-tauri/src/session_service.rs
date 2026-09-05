@@ -99,6 +99,11 @@ fn content_index_supported(platform: &str) -> bool {
             | "chat2db-local"
             | "chat2db-community"
             | "chat2db-pro"
+            | "opencode"
+            | "zcode"
+            | "kiro"
+            | "kiro-ide"
+            | "gemini"
     )
 }
 

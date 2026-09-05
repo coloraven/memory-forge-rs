@@ -6,9 +6,11 @@ use std::time::SystemTime;
 
 use serde_json::{json, Value};
 
+use crate::database::{SessionContentEntry, SessionContentIndex, SessionSummaryCache};
+
 use super::{
-    build_commands, ContentMatch, PlatformAdapter, SessionDetail, SessionListItem,
-    SessionListResult, TimelineBlock,
+    build_commands, content_entries_to_matches, push_bounded_index_entry, ContentMatch,
+    PlatformAdapter, SessionDetail, SessionKey, SessionListItem, SessionListResult, TimelineBlock,
 };
 
 pub struct KiroPlatform {
@@ -152,6 +154,45 @@ impl KiroPlatform {
 
         blocks
     }
+
+    fn jsonl_path(&self, session_key: &str) -> PathBuf {
+        self.sessions_dir.join(format!("{session_key}.jsonl"))
+    }
+
+    fn searchable_content_entries(&self, session_key: &str) -> Vec<SessionContentEntry> {
+        let lines = self.read_jsonl(&self.jsonl_path(session_key));
+        let mut entries = Vec::new();
+        let mut indexed_bytes = 0usize;
+        let mut msg_index = 0usize;
+
+        for line in &lines {
+            let kind = line.get("kind").and_then(Value::as_str).unwrap_or("");
+            if kind != "Prompt" && kind != "AssistantMessage" {
+                continue;
+            }
+
+            let role = if kind == "Prompt" {
+                "user"
+            } else {
+                "assistant"
+            };
+
+            if let Some(text) = extract_content_text(line) {
+                let cleaned = if role == "user" {
+                    clean_hook_context(&text)
+                } else {
+                    text
+                };
+                let entry = SessionContentEntry::any_text(msg_index, role, vec![cleaned]);
+                if !push_bounded_index_entry(&mut entries, &mut indexed_bytes, entry) {
+                    break;
+                }
+            }
+            msg_index += 1;
+        }
+
+        entries
+    }
 }
 
 impl PlatformAdapter for KiroPlatform {
@@ -218,6 +259,30 @@ impl PlatformAdapter for KiroPlatform {
         }
 
         SessionListResult { total, items }
+    }
+
+    fn list_session_keys(&self) -> Option<Vec<SessionKey>> {
+        if !self.sessions_dir.exists() {
+            return Some(Vec::new());
+        }
+        Some(
+            fs::read_dir(&self.sessions_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|entry| {
+                    let meta_path = entry.path();
+                    if meta_path.extension().and_then(|e| e.to_str()) != Some("json") {
+                        return None;
+                    }
+                    let summary = self.scan_meta(&meta_path)?;
+                    Some(SessionKey::standalone(
+                        summary.session_id,
+                        modified_nanos(&meta_path) as i128,
+                    ))
+                })
+                .collect(),
+        )
     }
 
     fn get_session_detail(
@@ -316,46 +381,72 @@ impl PlatformAdapter for KiroPlatform {
         !self.content_search(session_key, query).is_empty()
     }
 
+    fn warm_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let Some(index) = index else {
+            return false;
+        };
+        let path = self.jsonl_path(session_key);
+        let Some(fingerprint) = SessionSummaryCache::fingerprint(&path) else {
+            return false;
+        };
+        if index.is_current("kiro", session_key, &fingerprint) {
+            return true;
+        }
+        let entries = self.searchable_content_entries(session_key);
+        index
+            .replace("kiro", session_key, &fingerprint, &entries)
+            .is_ok()
+    }
+
+    fn has_current_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let path = self.jsonl_path(session_key);
+        let (Some(index), Some(fingerprint)) =
+            (index, SessionSummaryCache::fingerprint(&path))
+        else {
+            return false;
+        };
+        index.is_current("kiro", session_key, &fingerprint)
+    }
+
     fn content_search(&self, session_key: &str, query: &str) -> Vec<ContentMatch> {
         let needle = query.trim().to_lowercase();
         if needle.is_empty() {
-            return vec![];
+            return Vec::new();
         }
+        content_entries_to_matches(self.searchable_content_entries(session_key), &needle)
+    }
 
-        let jsonl_path = self.sessions_dir.join(format!("{session_key}.jsonl"));
-        let lines = self.read_jsonl(&jsonl_path);
-        let mut matches = Vec::new();
-        let mut msg_index = 0usize;
-
-        for line in &lines {
-            let kind = line.get("kind").and_then(Value::as_str).unwrap_or("");
-            if kind != "Prompt" && kind != "AssistantMessage" {
-                continue;
-            }
-
-            let role = if kind == "Prompt" {
-                "user"
-            } else {
-                "assistant"
-            };
-
-            if let Some(text) = extract_content_text(line) {
-                let cleaned = if role == "user" {
-                    clean_hook_context(&text)
-                } else {
-                    text.clone()
-                };
-                if cleaned.to_lowercase().contains(&needle) {
-                    matches.push(ContentMatch {
-                        snippet: super::extract_snippet(&cleaned, &needle),
-                        match_index: msg_index,
-                        role: role.to_string(),
-                    });
-                }
-            }
-            msg_index += 1;
+    fn content_search_with_index(
+        &self,
+        session_key: &str,
+        query: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> Vec<ContentMatch> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
         }
-
+        let Some(index) = index else {
+            return self.content_search(session_key, &needle);
+        };
+        let path = self.jsonl_path(session_key);
+        let Some(fingerprint) = SessionSummaryCache::fingerprint(&path) else {
+            return self.content_search(session_key, &needle);
+        };
+        if let Some(entries) = index.get_matches("kiro", session_key, &fingerprint, &needle) {
+            return content_entries_to_matches(entries, &needle);
+        }
+        let entries = self.searchable_content_entries(session_key);
+        let matches = content_entries_to_matches(entries.clone(), &needle);
+        let _ = index.replace("kiro", session_key, &fingerprint, &entries);
         matches
     }
 }

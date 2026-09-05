@@ -5,9 +5,14 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::database::{
+    SessionContentEntry, SessionContentIndex, SessionSummaryFingerprint,
+};
+
 use super::{
-    build_commands, tool_text_from_value, ContentMatch, SessionDetail, SessionKey, SessionListItem,
-    SessionListResult, TimelineBlock, ToolCallBlock,
+    build_commands, content_entries_to_matches, push_bounded_index_entry, tool_text_from_value,
+    ContentMatch, SessionDetail, SessionKey, SessionListItem, SessionListResult, TimelineBlock,
+    ToolCallBlock,
 };
 
 pub struct OpenCodePlatform {
@@ -33,6 +38,81 @@ impl OpenCodePlatform {
         let conn = rusqlite::Connection::open(&self.db_path)
             .map_err(|e| format!("Failed to open opencode db: {e}"))?;
         Ok(conn)
+    }
+
+    fn session_content_fingerprint(&self, session_key: &str) -> Option<SessionSummaryFingerprint> {
+        let conn = self.connect().ok()?;
+        let (count, max_updated, total_bytes): (i64, i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(MAX(time_updated), 0), COALESCE(SUM(LENGTH(data)), 0)
+                 FROM part WHERE session_id = ?1",
+                params![session_key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .ok()?;
+        Some(SessionSummaryFingerprint {
+            file_size: count,
+            modified_at: format!("{max_updated}:{total_bytes}"),
+        })
+    }
+
+    fn searchable_content_entries(&self, session_key: &str) -> Vec<SessionContentEntry> {
+        let conn = match self.connect() {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+        let mut stmt = match conn.prepare(
+            "SELECT p.data, m.data FROM part p
+             JOIN message m ON p.message_id = m.id
+             WHERE p.session_id = ?1
+             ORDER BY p.time_created ASC, p.id ASC",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let mut rows = match stmt.query(params![session_key]) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut entries = Vec::new();
+        let mut indexed_bytes = 0usize;
+        let mut msg_index = 0usize;
+        while let Ok(Some(row)) = rows.next() {
+            let data_str: String = row.get(0).unwrap_or_default();
+            let message_data_str: String = row.get(1).unwrap_or_default();
+            let message_data: Value = serde_json::from_str(&message_data_str).unwrap_or_default();
+            let role = message_data
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or("assistant")
+                .to_string();
+            let data: Value = serde_json::from_str(&data_str).unwrap_or_default();
+            let kind = data.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let mut searchable = Vec::new();
+            if let Some(t) = data.get("text").and_then(|v| v.as_str()) {
+                searchable.push(t.to_string());
+            }
+            if kind == "tool" {
+                if let Some(name) = data.get("name").and_then(|v| v.as_str()) {
+                    searchable.push(name.to_string());
+                }
+                if let Some(state) = data.get("state") {
+                    if let Some(output) = state.get("output").and_then(|v| v.as_str()) {
+                        searchable.push(output.to_string());
+                    }
+                    if let Some(input) = state.get("input") {
+                        searchable.push(input.to_string());
+                    }
+                }
+            }
+            let entry = SessionContentEntry::any_text(msg_index, role, searchable);
+            if !push_bounded_index_entry(&mut entries, &mut indexed_bytes, entry) {
+                break;
+            }
+            msg_index += 1;
+        }
+        entries
     }
 }
 
@@ -143,7 +223,7 @@ impl super::PlatformAdapter for OpenCodePlatform {
 
     fn list_session_keys(&self) -> Option<Vec<SessionKey>> {
         if !self.db_path.exists() {
-            return None;
+            return Some(Vec::new());
         }
         let conn = self.connect().ok()?;
         let mut stmt = conn
@@ -487,60 +567,69 @@ impl super::PlatformAdapter for OpenCodePlatform {
         false
     }
 
-    fn content_search(&self, session_key: &str, query: &str) -> Vec<ContentMatch> {
-        let needle = query.to_lowercase();
-        if needle.is_empty() {
-            return vec![];
-        }
-
-        let conn = match self.connect() {
-            Ok(c) => c,
-            Err(_) => return vec![],
+    fn warm_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let Some(index) = index else {
+            return false;
         };
-
-        let mut matches = Vec::new();
-
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT p.data, m.role FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = ?1 ORDER BY p.id"
-        ) {
-            if let Ok(mut rows) = stmt.query(params![session_key]) {
-                let mut msg_index = 0usize;
-                while let Ok(Some(row)) = rows.next() {
-                    let data_str: String = row.get(0).unwrap_or_default();
-                    let role: String = row.get(1).unwrap_or_default();
-                    let data: Value = serde_json::from_str(&data_str).unwrap_or_default();
-                    let kind = data.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                    let mut searchable = Vec::new();
-                    if let Some(t) = data.get("text").and_then(|v| v.as_str()) {
-                        searchable.push(t.to_string());
-                    }
-                    if kind == "tool" {
-                        if let Some(name) = data.get("name").and_then(|v| v.as_str()) {
-                            searchable.push(name.to_string());
-                        }
-                        if let Some(state) = data.get("state") {
-                            if let Some(output) = state.get("output").and_then(|v| v.as_str()) {
-                                searchable.push(output.to_string());
-                            }
-                            if let Some(input) = state.get("input") {
-                                searchable.push(input.to_string());
-                            }
-                        }
-                    }
-                    let combined = searchable.join(" ").to_lowercase();
-                    if combined.contains(&needle) {
-                        let best = searchable.iter().find(|t| t.to_lowercase().contains(&needle)).cloned().unwrap_or_default();
-                        matches.push(ContentMatch {
-                            snippet: super::extract_snippet(&best, &needle),
-                            match_index: msg_index,
-                            role: role.clone(),
-                        });
-                    }
-                    msg_index += 1;
-                }
-            }
+        let Some(fingerprint) = self.session_content_fingerprint(session_key) else {
+            return false;
+        };
+        if index.is_current("opencode", session_key, &fingerprint) {
+            return true;
         }
+        let entries = self.searchable_content_entries(session_key);
+        index
+            .replace("opencode", session_key, &fingerprint, &entries)
+            .is_ok()
+    }
 
+    fn has_current_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let (Some(index), Some(fingerprint)) =
+            (index, self.session_content_fingerprint(session_key))
+        else {
+            return false;
+        };
+        index.is_current("opencode", session_key, &fingerprint)
+    }
+
+    fn content_search(&self, session_key: &str, query: &str) -> Vec<ContentMatch> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        content_entries_to_matches(self.searchable_content_entries(session_key), &needle)
+    }
+
+    fn content_search_with_index(
+        &self,
+        session_key: &str,
+        query: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> Vec<ContentMatch> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let Some(index) = index else {
+            return self.content_search(session_key, &needle);
+        };
+        let Some(fingerprint) = self.session_content_fingerprint(session_key) else {
+            return self.content_search(session_key, &needle);
+        };
+        if let Some(entries) = index.get_matches("opencode", session_key, &fingerprint, &needle) {
+            return content_entries_to_matches(entries, &needle);
+        }
+        let entries = self.searchable_content_entries(session_key);
+        let matches = content_entries_to_matches(entries.clone(), &needle);
+        let _ = index.replace("opencode", session_key, &fingerprint, &entries);
         matches
     }
 }
