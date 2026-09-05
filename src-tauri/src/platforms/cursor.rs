@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -320,7 +320,10 @@ impl CursorPlatform {
         headers
     }
 
-    fn collect_headers(&self, conn: Option<&Connection>) -> Vec<CursorComposerHeader> {
+    fn collect_headers(
+        &self,
+        conn: Option<&Connection>,
+    ) -> (Vec<CursorComposerHeader>, HashSet<String>) {
         let t0 = Instant::now();
         let mut by_id: HashMap<String, CursorComposerHeader> = HashMap::new();
         let mut global_count = 0usize;
@@ -350,7 +353,9 @@ impl CursorPlatform {
         let t_tr = Instant::now();
         let transcripts = self.discover_transcripts();
         let transcript_count = transcripts.len();
+        let mut transcript_ids = HashSet::with_capacity(transcript_count);
         for transcript in transcripts {
+            transcript_ids.insert(transcript.composer_id.clone());
             by_id.entry(transcript.composer_id.clone()).or_insert(
                 CursorComposerHeader {
                     composer_id: transcript.composer_id.clone(),
@@ -376,7 +381,7 @@ impl CursorPlatform {
             headers.len(),
             t0.elapsed()
         ));
-        headers
+        (headers, transcript_ids)
     }
 
     fn discover_transcripts(&self) -> Vec<TranscriptRef> {
@@ -545,37 +550,51 @@ impl CursorPlatform {
             .find(|header| header.composer_id == composer_id)
     }
 
-    fn should_show_list_item(&self, header: &CursorComposerHeader) -> bool {
+    fn should_show_list_item(
+        &self,
+        header: &CursorComposerHeader,
+        transcript_ids: &HashSet<String>,
+        global_conn: Option<&Connection>,
+    ) -> bool {
+        // Fast path: never open workspace DBs during list filtering.
         if header.source == CursorHeaderSource::Transcript {
             return true;
         }
         if header.has_human_label() {
             return true;
         }
-
-        let Ok((data, _)) = self.read_composer_data(&header.composer_id) else {
-            return self.find_transcript(&header.composer_id).is_some();
-        };
-        if !data.name.trim().is_empty() {
+        // Workspace index entries come from allComposers and are real sessions.
+        if header.source == CursorHeaderSource::Workspace {
+            return true;
+        }
+        if transcript_ids.contains(&header.composer_id) {
             return true;
         }
 
-        let Ok(bubbles) = self.read_bubbles(&header.composer_id) else {
+        // Unlabeled global headers: inspect global state.vscdb only.
+        let Some(conn) = global_conn else {
             return false;
         };
-        data.full_conversation_headers_only.iter().any(|item| {
-            let Some(bubble) = bubbles.get(&item.bubble_id) else {
-                return false;
-            };
-            bubble_has_visible_content(bubble, item.bubble_type)
-        })
+        match Self::read_composer_data_from_conn(conn, &header.composer_id) {
+            Ok(data) => {
+                !data.name.trim().is_empty() || !data.full_conversation_headers_only.is_empty()
+            }
+            Err(_) => false,
+        }
     }
 
-    fn enrich_header_title(&self, header: &mut CursorComposerHeader) {
+    fn enrich_header_title(
+        &self,
+        header: &mut CursorComposerHeader,
+        global_conn: Option<&Connection>,
+    ) {
         if header.has_human_label() {
             return;
         }
-        if let Ok((data, _)) = self.read_composer_data(&header.composer_id) {
+        let Some(conn) = global_conn else {
+            return;
+        };
+        if let Ok(data) = Self::read_composer_data_from_conn(conn, &header.composer_id) {
             if !data.name.trim().is_empty() {
                 header.name = data.name;
             }
@@ -739,18 +758,20 @@ impl PlatformAdapter for CursorPlatform {
         }
 
         let t_collect = Instant::now();
-        let mut headers = self.collect_headers(conn.as_ref());
+        let (mut headers, transcript_ids) = self.collect_headers(conn.as_ref());
         let collected = headers.len();
         let collect_elapsed = t_collect.elapsed();
 
         let t_filter = Instant::now();
-        headers.retain(|header| self.should_show_list_item(header));
+        headers.retain(|header| {
+            self.should_show_list_item(header, &transcript_ids, conn.as_ref())
+        });
         let after_filter = headers.len();
         let filter_elapsed = t_filter.elapsed();
 
         let t_enrich = Instant::now();
         for header in &mut headers {
-            self.enrich_header_title(header);
+            self.enrich_header_title(header, conn.as_ref());
         }
         let enrich_elapsed = t_enrich.elapsed();
 
@@ -771,8 +792,7 @@ impl PlatformAdapter for CursorPlatform {
                 };
                 let updated_at = header.updated_at_value().to_string();
                 let cwd = header.cwd();
-                let editable = header.source != CursorHeaderSource::Transcript
-                    || self.read_composer_data(&header.composer_id).is_ok();
+                let editable = header.source != CursorHeaderSource::Transcript;
                 SessionListItem {
                     platform: "cursor".to_string(),
                     session_key: header.composer_id.clone(),
@@ -815,7 +835,7 @@ impl PlatformAdapter for CursorPlatform {
 
         let conn = self.connect_readonly().ok();
         let t_headers = Instant::now();
-        let headers = self.collect_headers(conn.as_ref());
+        let (headers, _transcript_ids) = self.collect_headers(conn.as_ref());
         let headers_elapsed = t_headers.elapsed();
         let header = self.header_for(&headers, session_key).cloned();
 
@@ -1593,7 +1613,7 @@ mod tests {
             composer_id: "empty-not-a-real-composer".to_string(),
             ..Default::default()
         };
-        assert!(!platform.should_show_list_item(&empty));
+        assert!(!platform.should_show_list_item(&empty, &HashSet::new(), None));
     }
 
     #[test]
