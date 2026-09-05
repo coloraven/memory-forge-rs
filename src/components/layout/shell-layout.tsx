@@ -25,8 +25,33 @@ import { NavLink, Outlet, useNavigate } from "react-router";
 import { useDesktop } from "@/features/desktop/provider";
 import { api } from "@/features/desktop/api";
 import { cn } from "@/lib/utils";
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { MessageKey } from "@/features/desktop/i18n";
+
+const SIDEBAR_WIDTH_KEY = "memory-forge.sidebarWidth";
+const SIDEBAR_WIDTH_MIN = 180;
+const SIDEBAR_WIDTH_MAX = 360;
+const SIDEBAR_WIDTH_DEFAULT = 220;
+const SIDEBAR_COLLAPSED_WIDTH = 68;
+
+function readSidebarWidth(): number {
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
+    const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    if (!Number.isFinite(parsed)) return SIDEBAR_WIDTH_DEFAULT;
+    return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, parsed));
+  } catch {
+    return SIDEBAR_WIDTH_DEFAULT;
+  }
+}
+
+function writeSidebarWidth(width: number) {
+  try {
+    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
+  } catch {
+    /* ignore */
+  }
+}
 
 const navigation: Array<{
   to: string;
@@ -59,6 +84,8 @@ export default function ShellLayout() {
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  const [resizingSidebar, setResizingSidebar] = useState(false);
   const [hasUpdate, setHasUpdate] = useState(false);
   const [terminalMaximized, setTerminalMaximized] = useState(false);
 
@@ -99,6 +126,51 @@ export default function ShellLayout() {
       if (info.hasUpdate) setHasUpdate(true);
     }).catch(() => {});
   }, []);
+
+  const handleSidebarResizePointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || sidebarCollapsed) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const handle = e.currentTarget;
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    handle.setPointerCapture(e.pointerId);
+    setResizingSidebar(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const onMove = (ev: PointerEvent) => {
+      const next = Math.min(
+        SIDEBAR_WIDTH_MAX,
+        Math.max(SIDEBAR_WIDTH_MIN, startWidth + (ev.clientX - startX)),
+      );
+      setSidebarWidth(next);
+    };
+    const onUp = (ev: PointerEvent) => {
+      handle.releasePointerCapture(ev.pointerId);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setResizingSidebar(false);
+      setSidebarWidth((current) => {
+        writeSidebarWidth(current);
+        return current;
+      });
+    };
+
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  }, [sidebarCollapsed, sidebarWidth]);
+
+  const handleSidebarResizeDoubleClick = useCallback(() => {
+    setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
+    writeSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
+  }, []);
+
+  const desktopSidebarWidth = sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth;
 
   return (
     <div className="bg-shell h-screen overflow-hidden text-foreground">
@@ -143,23 +215,49 @@ export default function ShellLayout() {
 
       <div
         className={cn(
-          "relative grid h-full gap-2.5 p-2.5 pt-[4.5rem] lg:pt-2.5 transition-[grid-template-columns] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]",
+          "relative grid h-full gap-2.5 p-2.5 pt-[4.5rem] lg:pt-2.5",
+          resizingSidebar
+            ? "transition-none"
+            : "transition-[grid-template-columns] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]",
           terminalMaximized
-            ? "lg:grid-cols-1 p-0 gap-0 pt-0 lg:pt-0"
-            : sidebarCollapsed
-              ? "lg:grid-cols-[68px_minmax(0,1fr)]"
-              : "lg:grid-cols-[220px_minmax(0,1fr)]"
+            ? "grid-cols-1 p-0 gap-0 pt-0 lg:pt-0"
+            : "lg:grid-cols-[var(--shell-sidebar-width)_minmax(0,1fr)]"
         )}
+        style={
+          terminalMaximized
+            ? undefined
+            : ({ "--shell-sidebar-width": `${desktopSidebarWidth}px` } as CSSProperties)
+        }
       >
         {/* Sidebar */}
         <aside
           className={cn(
-            "panel-surface fixed inset-y-2.5 left-2.5 z-50 flex h-[calc(100vh-1.25rem)] w-[220px] flex-col overflow-hidden rounded-[24px] p-5 transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] lg:static lg:h-full lg:translate-x-0",
-            sidebarCollapsed ? "lg:w-auto lg:p-3" : "lg:w-auto lg:p-5",
+            "panel-surface relative fixed inset-y-2.5 left-2.5 z-50 flex h-[calc(100vh-1.25rem)] w-[220px] flex-col overflow-hidden rounded-[24px] p-5 transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] lg:static lg:h-full lg:translate-x-0 lg:w-full",
+            sidebarCollapsed ? "lg:p-3" : "lg:p-5",
             mobileMenuOpen ? "translate-x-0" : "-translate-x-full",
-            terminalMaximized ? "hidden lg:hidden" : "flex"
+            terminalMaximized ? "hidden lg:hidden" : "flex",
+            resizingSidebar && "transition-none"
           )}
         >
+          {!sidebarCollapsed && !terminalMaximized && (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-valuenow={sidebarWidth}
+              aria-valuemin={SIDEBAR_WIDTH_MIN}
+              aria-valuemax={SIDEBAR_WIDTH_MAX}
+              aria-label="Resize navigation"
+              title="Drag to resize"
+              onPointerDown={handleSidebarResizePointerDown}
+              onDoubleClick={handleSidebarResizeDoubleClick}
+              className={cn(
+                "absolute inset-y-0 -right-1 z-30 hidden w-2 cursor-col-resize touch-none lg:block",
+                "after:absolute after:inset-y-3 after:right-[3px] after:w-px after:bg-border/0 after:transition-colors after:rounded-full",
+                "hover:after:bg-primary/40",
+                resizingSidebar && "after:bg-primary/60",
+              )}
+            />
+          )}
           <div className="absolute inset-x-0 top-0 h-28 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06),transparent_70%)]" />
           <div className="relative flex h-full min-h-0 flex-col">
             {/* Logo */}

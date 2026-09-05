@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useCallback, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { cn } from '@/lib/utils'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Input } from '@/components/ui/input'
@@ -66,9 +66,32 @@ const platformColors = {
 
 const PAGE_SIZE = 50
 const JSONL_TRANSFER_PLATFORMS = new Set(['claude', 'codex', 'pi'])
+const SESSION_LIST_WIDTH_KEY = 'memory-forge.sessionListWidth'
+const SESSION_LIST_WIDTH_MIN = 200
+const SESSION_LIST_WIDTH_MAX = 520
+const SESSION_LIST_WIDTH_DEFAULT = 250
 const SESSION_CARD_RENDER_STYLE: CSSProperties = {
   contentVisibility: 'auto',
   containIntrinsicSize: '160px',
+}
+
+function readSessionListWidth(): number {
+  try {
+    const raw = window.localStorage.getItem(SESSION_LIST_WIDTH_KEY)
+    const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN
+    if (!Number.isFinite(parsed)) return SESSION_LIST_WIDTH_DEFAULT
+    return Math.min(SESSION_LIST_WIDTH_MAX, Math.max(SESSION_LIST_WIDTH_MIN, parsed))
+  } catch {
+    return SESSION_LIST_WIDTH_DEFAULT
+  }
+}
+
+function writeSessionListWidth(width: number) {
+  try {
+    window.localStorage.setItem(SESSION_LIST_WIDTH_KEY, String(width))
+  } catch {
+    /* ignore */
+  }
 }
 
 function sessionTreeSome(session: Session, predicate: (item: Session) => boolean): boolean {
@@ -101,6 +124,8 @@ export function SessionList() {
   const [probingImport, setProbingImport] = useState(false)
   const [committingImport, setCommittingImport] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
+  const [listWidth, setListWidth] = useState(readSessionListWidth)
+  const [resizing, setResizing] = useState(false)
 
   const showArchived = state.showArchived
   const { confirm, dialogProps } = useConfirmDialog()
@@ -288,6 +313,49 @@ export function SessionList() {
     setLastClickedIndex(null)
   }, [])
 
+  const handleResizePointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    const handle = e.currentTarget
+    const startX = e.clientX
+    const startWidth = listWidth
+    handle.setPointerCapture(e.pointerId)
+    setResizing(true)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const onMove = (ev: PointerEvent) => {
+      const next = Math.min(
+        SESSION_LIST_WIDTH_MAX,
+        Math.max(SESSION_LIST_WIDTH_MIN, startWidth + (ev.clientX - startX)),
+      )
+      setListWidth(next)
+    }
+    const onUp = (ev: PointerEvent) => {
+      handle.releasePointerCapture(ev.pointerId)
+      handle.removeEventListener('pointermove', onMove)
+      handle.removeEventListener('pointerup', onUp)
+      handle.removeEventListener('pointercancel', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      setResizing(false)
+      setListWidth((current) => {
+        writeSessionListWidth(current)
+        return current
+      })
+    }
+
+    handle.addEventListener('pointermove', onMove)
+    handle.addEventListener('pointerup', onUp)
+    handle.addEventListener('pointercancel', onUp)
+  }, [listWidth])
+
+  const handleResizeDoubleClick = useCallback(() => {
+    setListWidth(SESSION_LIST_WIDTH_DEFAULT)
+    writeSessionListWidth(SESSION_LIST_WIDTH_DEFAULT)
+  }, [])
+
   useEffect(() => {
     exitSelectionMode()
   }, [currentPlatform, showArchived, exitSelectionMode])
@@ -408,10 +476,35 @@ export function SessionList() {
   }
 
   return (
-    <aside className="flex h-full w-[250px] flex-shrink-0 flex-col border-r border-border/50 bg-gradient-to-b from-card to-card/55 backdrop-blur-xl xl:w-[280px]">
-      <div className="border-b border-border/50 p-4 md:p-5">
-        <div className="mb-4 flex items-center justify-between gap-2">
-          <h2 className="font-semibold text-foreground text-lg truncate flex-1 min-w-0 pr-1">
+    <aside
+      className="relative flex h-full min-w-0 flex-shrink-0 flex-col overflow-hidden border-r border-border/50 bg-gradient-to-b from-card to-card/55 backdrop-blur-xl"
+      style={{ width: listWidth }}
+    >
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-valuenow={listWidth}
+        aria-valuemin={SESSION_LIST_WIDTH_MIN}
+        aria-valuemax={SESSION_LIST_WIDTH_MAX}
+        aria-label="Resize session list"
+        title="Drag to resize"
+        onPointerDown={handleResizePointerDown}
+        onDoubleClick={handleResizeDoubleClick}
+        className={cn(
+          'absolute inset-y-0 -right-1 z-30 w-2 cursor-col-resize touch-none',
+          'after:absolute after:inset-y-0 after:right-[3px] after:w-px after:bg-border/0 after:transition-colors',
+          'hover:after:bg-primary/40',
+          resizing && 'after:bg-primary/60',
+        )}
+      />
+      <div className="min-w-0 overflow-hidden border-b border-border/50 p-4 md:p-5">
+        <div
+          className={cn(
+            'mb-4 flex min-w-0 gap-2',
+            listWidth < 300 ? 'flex-col' : 'items-center justify-between',
+          )}
+        >
+          <h2 className="min-w-0 flex-1 truncate pr-1 text-base font-semibold text-foreground md:text-lg">
             {(() => {
               if (currentPlatform === 'kiro-ide') return 'Kiro IDE'
               if (currentPlatform === 'opencode') return 'OpenCode'
@@ -424,7 +517,7 @@ export function SessionList() {
               return currentPlatform.charAt(0).toUpperCase() + currentPlatform.slice(1)
             })()} {showArchived ? t('session.archiveView') : t('session.sessions')}
           </h2>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="flex min-w-0 flex-shrink-0 flex-wrap items-center gap-1">
             {JSONL_TRANSFER_PLATFORMS.has(currentPlatform) && (
               <Button
                 variant="ghost"
@@ -484,13 +577,13 @@ export function SessionList() {
             </Button>
           </div>
         </div>
-        <div className="relative">
+        <div className="relative min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/50" />
           <Input
             placeholder={t('session.search')}
             value={searchInput}
             onChange={(e) => debouncedSetSearch(e.target.value)}
-            className="pl-10 bg-muted/20 border-border/40 hover:border-border/80 focus-visible:ring-1 focus-visible:ring-primary/40 focus-visible:border-primary/40 rounded-xl transition-all"
+            className="min-w-0 pl-10 bg-muted/20 border-border/40 hover:border-border/80 focus-visible:ring-1 focus-visible:ring-primary/40 focus-visible:border-primary/40 rounded-xl transition-all"
           />
         </div>
       </div>
@@ -558,8 +651,8 @@ export function SessionList() {
             : t('session.searchIndexIncomplete')}
         </div>
       )}
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-3 p-3 md:p-4">
+      <ScrollArea className="min-h-0 min-w-0 flex-1">
+        <div className="min-w-0 space-y-3 overflow-hidden p-3 md:p-4">
           {loading ? (
             Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="animate-pulse rounded-2xl border-l-4 border-border/30 p-4 bg-gradient-to-r from-muted/30 to-transparent">
