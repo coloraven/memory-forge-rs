@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rusqlite::types::ValueRef;
@@ -9,10 +10,12 @@ use serde_json::{json, Value};
 
 use super::{
     build_commands, extract_snippet, ContentMatch, PlatformAdapter, SessionDetail, SessionListItem,
-    SessionListResult, TimelineBlock,
+    SessionListResult, TimelineBlock, ToolCallBlock,
 };
 
 const COMPOSER_HEADERS_KEY: &str = "composer.composerHeaders";
+const WORKSPACE_COMPOSER_DATA_KEY: &str = "composer.composerData";
+const TRANSCRIPT_SESSION_PREFIX: &str = "transcript:";
 
 pub struct CursorPlatform {
     cursor_home: PathBuf,
@@ -44,6 +47,17 @@ struct CursorComposerHeader {
     subagent_info: Option<CursorSubagentInfo>,
     workspace_identifier: Option<Value>,
     agent_location: Option<Value>,
+    #[serde(default)]
+    source: CursorHeaderSource,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CursorHeaderSource {
+    #[default]
+    Global,
+    Workspace,
+    Transcript,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -85,6 +99,18 @@ struct CursorBubble {
     #[serde(default)]
     text: String,
     created_at: Option<Value>,
+    capability_type: Option<i64>,
+    #[serde(default)]
+    tool_former_data: Option<Value>,
+    thinking: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+struct TranscriptRef {
+    composer_id: String,
+    path: PathBuf,
+    project_slug: String,
+    updated_at_ms: i64,
 }
 
 impl CursorPlatform {
@@ -96,23 +122,129 @@ impl CursorPlatform {
         self.cursor_home.join("globalStorage").join("state.vscdb")
     }
 
-    fn connect_readonly(&self) -> Result<Connection, String> {
-        let db_path = self.db_path();
-        let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    fn workspace_storage_dir(&self) -> PathBuf {
+        self.cursor_home.join("workspaceStorage")
+    }
+
+    fn connect_readonly_path(db_path: &Path) -> Result<Connection, String> {
+        let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|e| format!("Failed to open Cursor db '{}': {e}", db_path.display()))?;
         conn.busy_timeout(Duration::from_millis(800)).ok();
         Ok(conn)
     }
 
+    fn connect_readonly(&self) -> Result<Connection, String> {
+        Self::connect_readonly_path(&self.db_path())
+    }
+
     fn connect_write(&self) -> Result<Connection, String> {
         let db_path = self.db_path();
         let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .map_err(|e| format!("Failed to open Cursor db for writing '{}': {e}. Close Cursor and try again if the database is locked.", db_path.display()))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to open Cursor db for writing '{}': {e}. Close Cursor and try again if the database is locked.",
+                    db_path.display()
+                )
+            })?;
         conn.busy_timeout(Duration::from_millis(800)).ok();
         Ok(conn)
     }
 
-    fn read_headers(&self, conn: &Connection) -> Result<Vec<CursorComposerHeader>, String> {
+    fn table_exists(conn: &Connection, name: &str) -> bool {
+        conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![name],
+            |_| Ok(()),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .is_some()
+    }
+
+    fn read_headers_from_table(conn: &Connection) -> Result<Vec<CursorComposerHeader>, String> {
+        if !Self::table_exists(conn, "composerHeaders") {
+            return Ok(Vec::new());
+        }
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT composerId, createdAt, lastUpdatedAt, isArchived, isSubagent, value, subagentTypeName
+                 FROM composerHeaders",
+            )
+            .map_err(|e| format!("Failed to prepare composerHeaders query: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row_text(row, 0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<i64>>(3)?.unwrap_or(0) != 0,
+                    row.get::<_, Option<i64>>(4)?.unwrap_or(0) != 0,
+                    row_text(row, 5)?,
+                    row_text(row, 6)?,
+                ))
+            })
+            .map_err(|e| format!("Failed to query composerHeaders: {e}"))?;
+
+        let mut headers = Vec::new();
+        for row in rows {
+            let Ok((composer_id, created_at, last_updated_at, is_archived, is_subagent, value_raw, subagent_type)) =
+                row
+            else {
+                continue;
+            };
+            if composer_id.trim().is_empty() {
+                continue;
+            }
+
+            let mut header = if value_raw.trim().is_empty() {
+                CursorComposerHeader {
+                    composer_id: composer_id.clone(),
+                    ..Default::default()
+                }
+            } else {
+                match serde_json::from_str::<CursorComposerHeader>(&value_raw) {
+                    Ok(mut parsed) => {
+                        if parsed.composer_id.trim().is_empty() {
+                            parsed.composer_id = composer_id.clone();
+                        }
+                        parsed
+                    }
+                    Err(_) => CursorComposerHeader {
+                        composer_id: composer_id.clone(),
+                        ..Default::default()
+                    },
+                }
+            };
+
+            header.created_at = header.created_at.or(created_at);
+            header.last_updated_at = header.last_updated_at.or(last_updated_at);
+            header.is_archived = header.is_archived || is_archived;
+            if is_subagent
+                && header
+                    .subagent_info
+                    .as_ref()
+                    .map(|info| info.parent_composer_id.trim().is_empty())
+                    .unwrap_or(true)
+            {
+                header.subagent_info = Some(CursorSubagentInfo {
+                    parent_composer_id: if subagent_type.trim().is_empty() {
+                        "subagent".to_string()
+                    } else {
+                        subagent_type
+                    },
+                });
+            }
+            header.source = CursorHeaderSource::Global;
+            headers.push(header);
+        }
+        Ok(headers)
+    }
+
+    fn read_headers_from_item_table(
+        conn: &Connection,
+    ) -> Result<Vec<CursorComposerHeader>, String> {
         let raw = conn
             .query_row(
                 "SELECT value FROM ItemTable WHERE key = ?1",
@@ -127,19 +259,156 @@ impl CursorPlatform {
             return Ok(Vec::new());
         }
 
-        let mut headers: CursorComposerHeaders = serde_json::from_str(&raw)
+        let headers: CursorComposerHeaders = serde_json::from_str(&raw)
             .map_err(|e| format!("Failed to parse Cursor composer headers: {e}"))?;
-        headers
-            .all_composers
-            .retain(CursorComposerHeader::is_listable_index_entry);
-        headers
-            .all_composers
-            .sort_by_key(|header| std::cmp::Reverse(header.updated_at_value()));
         Ok(headers.all_composers)
     }
 
-    fn read_composer_data(
-        &self,
+    fn read_workspace_headers(&self) -> Vec<CursorComposerHeader> {
+        let root = self.workspace_storage_dir();
+        let Ok(entries) = fs::read_dir(&root) else {
+            return Vec::new();
+        };
+
+        let mut headers = Vec::new();
+        for entry in entries.flatten() {
+            let db_path = entry.path().join("state.vscdb");
+            if !db_path.is_file() {
+                continue;
+            }
+            let Ok(conn) = Self::connect_readonly_path(&db_path) else {
+                continue;
+            };
+            let Ok(Some(raw)) = conn
+                .query_row(
+                    "SELECT value FROM ItemTable WHERE key = ?1",
+                    params![WORKSPACE_COMPOSER_DATA_KEY],
+                    |row| row_text(row, 0),
+                )
+                .optional()
+            else {
+                continue;
+            };
+            let Ok(payload) = serde_json::from_str::<Value>(&raw) else {
+                continue;
+            };
+            let Some(all_composers) = payload.get("allComposers").and_then(Value::as_array) else {
+                continue;
+            };
+
+            let workspace_cwd = read_workspace_cwd(&entry.path());
+            for item in all_composers {
+                let Ok(mut header) = serde_json::from_value::<CursorComposerHeader>(item.clone())
+                else {
+                    continue;
+                };
+                if header.composer_id.trim().is_empty() {
+                    continue;
+                }
+                if header.workspace_identifier.is_none() {
+                    if let Some(cwd) = workspace_cwd.as_ref() {
+                        header.workspace_identifier = Some(json!({
+                            "uri": { "fsPath": cwd, "path": cwd }
+                        }));
+                    }
+                }
+                header.source = CursorHeaderSource::Workspace;
+                headers.push(header);
+            }
+        }
+        headers
+    }
+
+    fn collect_headers(&self, conn: Option<&Connection>) -> Vec<CursorComposerHeader> {
+        let mut by_id: HashMap<String, CursorComposerHeader> = HashMap::new();
+
+        if let Some(conn) = conn {
+            let table_headers = Self::read_headers_from_table(conn).unwrap_or_default();
+            let item_headers = if table_headers.is_empty() {
+                Self::read_headers_from_item_table(conn).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            for header in table_headers.into_iter().chain(item_headers) {
+                by_id.insert(header.composer_id.clone(), header);
+            }
+        }
+
+        for header in self.read_workspace_headers() {
+            by_id.entry(header.composer_id.clone()).or_insert(header);
+        }
+
+        for transcript in self.discover_transcripts() {
+            by_id.entry(transcript.composer_id.clone()).or_insert(
+                CursorComposerHeader {
+                    composer_id: transcript.composer_id.clone(),
+                    name: transcript.composer_id.clone(),
+                    subtitle: format!("agent transcript · {}", transcript.project_slug),
+                    last_updated_at: Some(transcript.updated_at_ms),
+                    created_at: Some(transcript.updated_at_ms),
+                    source: CursorHeaderSource::Transcript,
+                    ..Default::default()
+                },
+            );
+        }
+
+        let mut headers: Vec<_> = by_id.into_values().collect();
+        headers.retain(CursorComposerHeader::is_listable_index_entry);
+        headers.sort_by_key(|header| std::cmp::Reverse(header.updated_at_value()));
+        headers
+    }
+
+    fn discover_transcripts(&self) -> Vec<TranscriptRef> {
+        let Some(root) = default_cursor_projects_home() else {
+            return Vec::new();
+        };
+        let Ok(projects) = fs::read_dir(&root) else {
+            return Vec::new();
+        };
+
+        let mut out = Vec::new();
+        for project in projects.flatten() {
+            let project_slug = project.file_name().to_string_lossy().to_string();
+            let transcripts_dir = project.path().join("agent-transcripts");
+            let Ok(sessions) = fs::read_dir(&transcripts_dir) else {
+                continue;
+            };
+            for session in sessions.flatten() {
+                if !session.path().is_dir() {
+                    continue;
+                }
+                let composer_id = session.file_name().to_string_lossy().to_string();
+                if composer_id.trim().is_empty() {
+                    continue;
+                }
+                let path = session.path().join(format!("{composer_id}.jsonl"));
+                if !path.is_file() {
+                    continue;
+                }
+                let updated_at_ms = fs::metadata(&path)
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_millis() as i64)
+                    .unwrap_or(0);
+                out.push(TranscriptRef {
+                    composer_id,
+                    path,
+                    project_slug: project_slug.clone(),
+                    updated_at_ms,
+                });
+            }
+        }
+        out
+    }
+
+    fn find_transcript(&self, composer_id: &str) -> Option<TranscriptRef> {
+        self.discover_transcripts()
+            .into_iter()
+            .find(|item| item.composer_id == composer_id)
+    }
+
+    fn read_composer_data_from_conn(
         conn: &Connection,
         composer_id: &str,
     ) -> Result<CursorComposerData, String> {
@@ -158,11 +427,37 @@ impl CursorPlatform {
             .map_err(|e| format!("Failed to parse Cursor composer data '{composer_id}': {e}"))
     }
 
-    fn read_bubbles(
-        &self,
+    fn read_composer_data(&self, composer_id: &str) -> Result<(CursorComposerData, bool), String> {
+        if let Ok(conn) = self.connect_readonly() {
+            if let Ok(data) = Self::read_composer_data_from_conn(&conn, composer_id) {
+                return Ok((data, true));
+            }
+        }
+
+        let root = self.workspace_storage_dir();
+        if let Ok(entries) = fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let db_path = entry.path().join("state.vscdb");
+                let Ok(conn) = Self::connect_readonly_path(&db_path) else {
+                    continue;
+                };
+                if let Ok(data) = Self::read_composer_data_from_conn(&conn, composer_id) {
+                    return Ok((data, true));
+                }
+            }
+        }
+
+        Err(format!("Cursor composer data not found: {composer_id}"))
+    }
+
+    fn read_bubbles_from_conn(
         conn: &Connection,
         composer_id: &str,
     ) -> Result<HashMap<String, CursorBubble>, String> {
+        if !Self::table_exists(conn, "cursorDiskKV") {
+            return Ok(HashMap::new());
+        }
+
         let (start, end) = bubble_key_bounds(composer_id);
         let mut stmt = conn
             .prepare(
@@ -194,6 +489,31 @@ impl CursorPlatform {
         Ok(bubbles)
     }
 
+    fn read_bubbles(&self, composer_id: &str) -> Result<HashMap<String, CursorBubble>, String> {
+        if let Ok(conn) = self.connect_readonly() {
+            let bubbles = Self::read_bubbles_from_conn(&conn, composer_id)?;
+            if !bubbles.is_empty() {
+                return Ok(bubbles);
+            }
+        }
+
+        let root = self.workspace_storage_dir();
+        if let Ok(entries) = fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let db_path = entry.path().join("state.vscdb");
+                let Ok(conn) = Self::connect_readonly_path(&db_path) else {
+                    continue;
+                };
+                let bubbles = Self::read_bubbles_from_conn(&conn, composer_id)?;
+                if !bubbles.is_empty() {
+                    return Ok(bubbles);
+                }
+            }
+        }
+
+        Ok(HashMap::new())
+    }
+
     fn header_for<'a>(
         &self,
         headers: &'a [CursorComposerHeader],
@@ -204,28 +524,127 @@ impl CursorPlatform {
             .find(|header| header.composer_id == composer_id)
     }
 
-    fn should_show_list_item(&self, conn: &Connection, header: &CursorComposerHeader) -> bool {
+    fn should_show_list_item(&self, header: &CursorComposerHeader) -> bool {
+        if header.source == CursorHeaderSource::Transcript {
+            return true;
+        }
         if header.has_human_label() {
             return true;
         }
 
-        let Ok(data) = self.read_composer_data(conn, &header.composer_id) else {
-            return false;
+        let Ok((data, _)) = self.read_composer_data(&header.composer_id) else {
+            return self.find_transcript(&header.composer_id).is_some();
         };
         if !data.name.trim().is_empty() {
             return true;
         }
 
-        let Ok(bubbles) = self.read_bubbles(conn, &header.composer_id) else {
+        let Ok(bubbles) = self.read_bubbles(&header.composer_id) else {
             return false;
         };
         data.full_conversation_headers_only.iter().any(|item| {
             let Some(bubble) = bubbles.get(&item.bubble_id) else {
                 return false;
             };
-            let bubble_type = bubble.bubble_type.or(item.bubble_type);
-            bubble_role(bubble_type).is_some() && !bubble.text.trim().is_empty()
+            bubble_has_visible_content(bubble, item.bubble_type)
         })
+    }
+
+    fn enrich_header_title(&self, header: &mut CursorComposerHeader) {
+        if header.has_human_label() {
+            return;
+        }
+        if let Ok((data, _)) = self.read_composer_data(&header.composer_id) {
+            if !data.name.trim().is_empty() {
+                header.name = data.name;
+            }
+        }
+    }
+
+    fn blocks_from_composer(
+        &self,
+        session_key: &str,
+        data: &CursorComposerData,
+        bubbles: &HashMap<String, CursorBubble>,
+    ) -> Vec<TimelineBlock> {
+        let mut blocks = Vec::new();
+        let mut pending_tools = Vec::new();
+
+        for (index, conversation_header) in data.full_conversation_headers_only.iter().enumerate() {
+            let Some(bubble) = bubbles.get(&conversation_header.bubble_id) else {
+                continue;
+            };
+            let bubble_type = bubble.bubble_type.or(conversation_header.bubble_type);
+
+            if let Some(tool_call) =
+                tool_former_to_block(session_key, &conversation_header.bubble_id, bubble)
+            {
+                attach_or_pending_tool(&mut blocks, &mut pending_tools, tool_call);
+            }
+
+            if let Some(thinking) = thinking_text(bubble) {
+                flush_pending_tools(&mut blocks, &mut pending_tools);
+                blocks.push(TimelineBlock {
+                    id: format!("{}:thinking", conversation_header.bubble_id),
+                    role: "thinking".to_string(),
+                    content: thinking,
+                    editable: false,
+                    edit_target: String::new(),
+                    source_meta: json!({
+                        "composerId": session_key,
+                        "bubbleId": conversation_header.bubble_id,
+                        "bubbleType": bubble_type,
+                        "capabilityType": bubble.capability_type,
+                        "createdAt": bubble.created_at,
+                        "conversationIndex": index,
+                    }),
+                    tool_calls: Vec::new(),
+                });
+            }
+
+            let Some(role) = bubble_role(bubble_type) else {
+                continue;
+            };
+            if bubble.text.trim().is_empty() {
+                continue;
+            }
+
+            let mut block = TimelineBlock {
+                id: conversation_header.bubble_id.clone(),
+                role: role.to_string(),
+                content: bubble.text.clone(),
+                editable: true,
+                edit_target: format!("{session_key}::{}", conversation_header.bubble_id),
+                source_meta: json!({
+                    "composerId": session_key,
+                    "bubbleId": conversation_header.bubble_id,
+                    "bubbleType": bubble_type,
+                    "capabilityType": bubble.capability_type,
+                    "createdAt": bubble.created_at,
+                    "conversationIndex": index,
+                }),
+                tool_calls: Vec::new(),
+            };
+            if role == "assistant" {
+                block.tool_calls.append(&mut pending_tools);
+            } else {
+                flush_pending_tools(&mut blocks, &mut pending_tools);
+            }
+            blocks.push(block);
+        }
+
+        flush_pending_tools(&mut blocks, &mut pending_tools);
+        blocks
+    }
+
+    fn blocks_from_transcript(&self, transcript: &TranscriptRef) -> Result<Vec<TimelineBlock>, String> {
+        let raw = fs::read_to_string(&transcript.path)
+            .map_err(|e| format!("Failed to read Cursor transcript '{}': {e}", transcript.path.display()))?;
+        Ok(parse_transcript_blocks(
+            &transcript.composer_id,
+            &raw,
+            &transcript.path,
+        ))
     }
 }
 
@@ -288,36 +707,21 @@ impl PlatformAdapter for CursorPlatform {
         limit: Option<usize>,
         offset: usize,
     ) -> SessionListResult {
-        if !self.db_path().exists() {
+        let conn = self.connect_readonly().ok();
+        if conn.is_none() && !self.workspace_storage_dir().is_dir() && default_cursor_projects_home().is_none()
+        {
             return SessionListResult {
                 total: 0,
                 items: Vec::new(),
             };
         }
 
-        let conn = match self.connect_readonly() {
-            Ok(conn) => conn,
-            Err(_) => {
-                return SessionListResult {
-                    total: 0,
-                    items: Vec::new(),
-                }
-            }
-        };
-        let headers = match self.read_headers(&conn) {
-            Ok(headers) => headers,
-            Err(_) => {
-                return SessionListResult {
-                    total: 0,
-                    items: Vec::new(),
-                }
-            }
-        };
+        let mut headers = self.collect_headers(conn.as_ref());
+        headers.retain(|header| self.should_show_list_item(header));
+        for header in &mut headers {
+            self.enrich_header_title(header);
+        }
 
-        let headers: Vec<_> = headers
-            .into_iter()
-            .filter(|header| self.should_show_list_item(&conn, header))
-            .collect();
         let total = headers.len();
         let items = headers
             .into_iter()
@@ -335,6 +739,8 @@ impl PlatformAdapter for CursorPlatform {
                 };
                 let updated_at = header.updated_at_value().to_string();
                 let cwd = header.cwd();
+                let editable = header.source != CursorHeaderSource::Transcript
+                    || self.read_composer_data(&header.composer_id).is_ok();
                 SessionListItem {
                     platform: "cursor".to_string(),
                     session_key: header.composer_id.clone(),
@@ -344,7 +750,7 @@ impl PlatformAdapter for CursorPlatform {
                     preview: header.subtitle,
                     updated_at,
                     cwd,
-                    editable: true,
+                    editable,
                     content_matches: Vec::new(),
                     total_content_matches: 0,
                     favorite: false,
@@ -361,56 +767,67 @@ impl PlatformAdapter for CursorPlatform {
         session_key: &str,
         alias_map: &HashMap<String, String>,
     ) -> Result<SessionDetail, String> {
-        let conn = self.connect_readonly()?;
-        let headers = self.read_headers(&conn).unwrap_or_default();
+        let session_key = session_key
+            .strip_prefix(TRANSCRIPT_SESSION_PREFIX)
+            .unwrap_or(session_key);
+
+        let conn = self.connect_readonly().ok();
+        let headers = self.collect_headers(conn.as_ref());
         let header = self.header_for(&headers, session_key).cloned();
-        let data = self.read_composer_data(&conn, session_key)?;
-        let bubbles = self.read_bubbles(&conn, session_key)?;
 
-        let mut blocks = Vec::new();
-        for (index, conversation_header) in data.full_conversation_headers_only.iter().enumerate() {
-            let Some(bubble) = bubbles.get(&conversation_header.bubble_id) else {
-                continue;
-            };
-            let bubble_type = bubble.bubble_type.or(conversation_header.bubble_type);
-            let Some(role) = bubble_role(bubble_type) else {
-                continue;
-            };
-            if bubble.text.trim().is_empty() {
-                continue;
+        if let Ok((data, _)) = self.read_composer_data(session_key) {
+            let bubbles = self.read_bubbles(session_key)?;
+            let mut blocks = self.blocks_from_composer(session_key, &data, &bubbles);
+            if blocks.is_empty() {
+                if let Some(transcript) = self.find_transcript(session_key) {
+                    if let Ok(transcript_blocks) = self.blocks_from_transcript(&transcript) {
+                        if !transcript_blocks.is_empty() {
+                            blocks = transcript_blocks;
+                        }
+                    }
+                }
             }
+            let alias = alias_map.get(session_key).cloned().unwrap_or_default();
+            let title = if alias.is_empty() {
+                header
+                    .as_ref()
+                    .map(CursorComposerHeader::title)
+                    .filter(|value| value != session_key)
+                    .unwrap_or_else(|| data.title(session_key))
+            } else {
+                alias.clone()
+            };
+            let cwd = header
+                .as_ref()
+                .map(CursorComposerHeader::cwd)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| data.cwd());
 
-            blocks.push(TimelineBlock {
-                id: conversation_header.bubble_id.clone(),
-                role: role.to_string(),
-                content: bubble.text.clone(),
-                editable: true,
-                edit_target: format!("{session_key}::{}", conversation_header.bubble_id),
-                source_meta: json!({
-                    "composerId": session_key,
-                    "bubbleId": conversation_header.bubble_id,
-                    "bubbleType": bubble_type,
-                    "createdAt": bubble.created_at,
-                    "conversationIndex": index,
-                }),
-                tool_calls: Vec::new(),
+            return Ok(SessionDetail {
+                platform: "cursor".to_string(),
+                session_key: session_key.to_string(),
+                session_id: session_key.to_string(),
+                title,
+                alias_title: alias,
+                cwd,
+                commands: build_commands("cursor", session_key),
+                blocks,
             });
         }
 
+        let transcript = self
+            .find_transcript(session_key)
+            .ok_or_else(|| format!("Cursor session not found: {session_key}"))?;
+        let blocks = self.blocks_from_transcript(&transcript)?;
         let alias = alias_map.get(session_key).cloned().unwrap_or_default();
         let title = if alias.is_empty() {
             header
                 .as_ref()
                 .map(CursorComposerHeader::title)
-                .unwrap_or_else(|| data.title(session_key))
+                .unwrap_or_else(|| session_key.to_string())
         } else {
             alias.clone()
         };
-        let cwd = header
-            .as_ref()
-            .map(CursorComposerHeader::cwd)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| data.cwd());
 
         Ok(SessionDetail {
             platform: "cursor".to_string(),
@@ -418,7 +835,7 @@ impl PlatformAdapter for CursorPlatform {
             session_id: session_key.to_string(),
             title,
             alias_title: alias,
-            cwd,
+            cwd: header.as_ref().map(CursorComposerHeader::cwd).unwrap_or_default(),
             commands: build_commands("cursor", session_key),
             blocks,
         })
@@ -430,6 +847,9 @@ impl PlatformAdapter for CursorPlatform {
             .ok_or_else(|| format!("Invalid Cursor edit target: {edit_target}"))?;
         if composer_id.is_empty() || bubble_id.is_empty() {
             return Err(format!("Invalid Cursor edit target: {edit_target}"));
+        }
+        if bubble_id.contains(":thinking") || bubble_id.starts_with("transcript:") {
+            return Err("Cursor transcript/thinking blocks are read-only".to_string());
         }
 
         let conn = self.connect_write()?;
@@ -453,6 +873,20 @@ impl PlatformAdapter for CursorPlatform {
         if bubble_role(Some(bubble_type)).is_none() {
             return Err(format!("Cursor bubble type is not editable: {bubble_type}"));
         }
+        if payload
+            .get("toolFormerData")
+            .and_then(|value| value.get("name"))
+            .and_then(Value::as_str)
+            .is_some()
+            && payload
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+        {
+            return Err("Cursor tool-call bubbles are not editable as text".to_string());
+        }
 
         let old_content = payload
             .get("text")
@@ -470,7 +904,11 @@ impl PlatformAdapter for CursorPlatform {
             "UPDATE cursorDiskKV SET value = ?1 WHERE key = ?2",
             params![serialized, format!("bubbleId:{composer_id}:{bubble_id}")],
         )
-        .map_err(|e| format!("Failed to update Cursor bubble. Close Cursor and try again if the database is locked: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "Failed to update Cursor bubble. Close Cursor and try again if the database is locked: {e}"
+            )
+        })?;
 
         Ok(old_content)
     }
@@ -485,56 +923,74 @@ impl PlatformAdapter for CursorPlatform {
             return Vec::new();
         }
 
-        let conn = match self.connect_readonly() {
-            Ok(conn) => conn,
-            Err(_) => return Vec::new(),
-        };
-        let data = match self.read_composer_data(&conn, session_key) {
-            Ok(data) => data,
-            Err(_) => return Vec::new(),
-        };
-        let mut index_by_bubble = HashMap::new();
-        for (index, header) in data.full_conversation_headers_only.iter().enumerate() {
-            if let Some(role) = bubble_role(header.bubble_type) {
-                index_by_bubble.insert(header.bubble_id.clone(), (index, role.to_string()));
+        if let Ok((data, _)) = self.read_composer_data(session_key) {
+            let Ok(bubbles) = self.read_bubbles(session_key) else {
+                return Vec::new();
+            };
+            let mut matches = Vec::new();
+            for (index, header) in data.full_conversation_headers_only.iter().enumerate() {
+                let Some(bubble) = bubbles.get(&header.bubble_id) else {
+                    continue;
+                };
+                let role = bubble_role(bubble.bubble_type.or(header.bubble_type))
+                    .unwrap_or("assistant")
+                    .to_string();
+                let mut haystacks = vec![bubble.text.clone()];
+                if let Some(thinking) = thinking_text(bubble) {
+                    haystacks.push(thinking);
+                }
+                if let Some(tool) = bubble.tool_former_data.as_ref() {
+                    if let Some(name) = tool.get("name").and_then(Value::as_str) {
+                        haystacks.push(name.to_string());
+                    }
+                    if let Some(raw_args) = tool.get("rawArgs").and_then(Value::as_str) {
+                        haystacks.push(raw_args.to_string());
+                    }
+                }
+                for text in haystacks {
+                    if text.to_lowercase().contains(&needle) {
+                        matches.push(ContentMatch {
+                            snippet: extract_snippet(&text, &needle),
+                            match_index: index,
+                            role: role.clone(),
+                        });
+                        break;
+                    }
+                }
             }
+            matches.sort_by_key(|item| item.match_index);
+            return matches;
         }
 
-        let (start, end) = bubble_key_bounds(session_key);
-        let like = format!("%{}%", escape_like(&needle));
-        let mut stmt = match conn.prepare(
-            "SELECT key, value FROM cursorDiskKV WHERE key >= ?1 AND key < ?2 AND value LIKE ?3 ESCAPE '\\'",
-        ) {
-            Ok(stmt) => stmt,
-            Err(_) => return Vec::new(),
+        let Some(transcript) = self.find_transcript(session_key) else {
+            return Vec::new();
         };
-        let rows = match stmt.query_map(params![start, end, like], |row| {
-            Ok((row_text(row, 0)?, row_text(row, 1)?))
-        }) {
-            Ok(rows) => rows,
-            Err(_) => return Vec::new(),
+        let Ok(blocks) = self.blocks_from_transcript(&transcript) else {
+            return Vec::new();
         };
-
-        let prefix = format!("bubbleId:{session_key}:");
         let mut matches = Vec::new();
-        for row in rows {
-            let Ok((key, raw)) = row else { continue };
-            let bubble_id = key.strip_prefix(&prefix).unwrap_or("");
-            let Some((match_index, role)) = index_by_bubble.get(bubble_id) else {
-                continue;
-            };
-            let Ok(bubble) = serde_json::from_str::<CursorBubble>(&raw) else {
-                continue;
-            };
-            if bubble.text.to_lowercase().contains(&needle) {
-                matches.push(ContentMatch {
-                    snippet: extract_snippet(&bubble.text, &needle),
-                    match_index: *match_index,
-                    role: role.clone(),
-                });
+        for (index, block) in blocks.iter().enumerate() {
+            let mut haystacks = vec![block.content.clone()];
+            for tool in &block.tool_calls {
+                haystacks.push(tool.name.clone());
+                if let Some(input) = &tool.input {
+                    haystacks.push(input.clone());
+                }
+                if let Some(output) = &tool.output {
+                    haystacks.push(output.clone());
+                }
+            }
+            for text in haystacks {
+                if text.to_lowercase().contains(&needle) {
+                    matches.push(ContentMatch {
+                        snippet: extract_snippet(&text, &needle),
+                        match_index: index,
+                        role: block.role.clone(),
+                    });
+                    break;
+                }
             }
         }
-        matches.sort_by_key(|item| item.match_index);
         matches
     }
 }
@@ -563,12 +1019,32 @@ pub fn default_cursor_home() -> Option<PathBuf> {
     }
 }
 
+fn default_cursor_projects_home() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".cursor").join("projects"))
+}
+
 fn bubble_role(bubble_type: Option<i64>) -> Option<&'static str> {
     match bubble_type {
         Some(1) => Some("user"),
         Some(2) => Some("assistant"),
         _ => None,
     }
+}
+
+fn bubble_has_visible_content(bubble: &CursorBubble, header_type: Option<i64>) -> bool {
+    if !bubble.text.trim().is_empty() && bubble_role(bubble.bubble_type.or(header_type)).is_some() {
+        return true;
+    }
+    if thinking_text(bubble).is_some() {
+        return true;
+    }
+    bubble
+        .tool_former_data
+        .as_ref()
+        .and_then(|value| value.get("name"))
+        .and_then(Value::as_str)
+        .map(|name| !name.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn bubble_key_bounds(composer_id: &str) -> (String, String) {
@@ -600,6 +1076,246 @@ fn agent_location_path(value: Option<&Value>) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn read_workspace_cwd(workspace_dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(workspace_dir.join("workspace.json")).ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    value
+        .get("folder")
+        .and_then(Value::as_str)
+        .map(|folder| {
+            folder
+                .strip_prefix("file:///")
+                .or_else(|| folder.strip_prefix("file://"))
+                .unwrap_or(folder)
+                .replace('/', "\\")
+        })
+        .or_else(|| {
+            value
+                .pointer("/workspace/folders/0/uri/fsPath")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+}
+
+fn thinking_text(bubble: &CursorBubble) -> Option<String> {
+    let thinking = bubble.thinking.as_ref()?;
+    let text = thinking
+        .get("text")
+        .and_then(Value::as_str)
+        .or_else(|| thinking.as_str())
+        .unwrap_or_default()
+        .trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+fn tool_former_to_block(
+    session_key: &str,
+    bubble_id: &str,
+    bubble: &CursorBubble,
+) -> Option<ToolCallBlock> {
+    let tool = bubble.tool_former_data.as_ref()?;
+    let name = tool.get("name").and_then(Value::as_str)?.trim();
+    if name.is_empty() {
+        return None;
+    }
+
+    let status = tool
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("completed")
+        .to_string();
+    let id = tool
+        .get("toolCallId")
+        .and_then(Value::as_str)
+        .unwrap_or(bubble_id)
+        .to_string();
+    let input = tool
+        .get("rawArgs")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            tool.get("params")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        });
+    let output = tool
+        .get("result")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let error = if status == "error" {
+        tool.pointer("/additionalData/status")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .or_else(|| Some(status.clone()))
+    } else {
+        None
+    };
+
+    Some(ToolCallBlock {
+        id,
+        name: name.to_string(),
+        kind: "toolFormer".to_string(),
+        status,
+        input,
+        output,
+        error,
+        started_at: None,
+        ended_at: None,
+        source_meta: json!({
+            "composerId": session_key,
+            "bubbleId": bubble_id,
+            "capabilityType": bubble.capability_type,
+            "tool": tool.get("tool"),
+            "toolIndex": tool.get("toolIndex"),
+            "modelCallId": tool.get("modelCallId"),
+        }),
+    })
+}
+
+fn attach_or_pending_tool(
+    blocks: &mut Vec<TimelineBlock>,
+    pending: &mut Vec<ToolCallBlock>,
+    tool_call: ToolCallBlock,
+) {
+    if let Some(last) = blocks.iter_mut().rev().find(|block| block.role == "assistant") {
+        last.tool_calls.push(tool_call);
+    } else {
+        pending.push(tool_call);
+    }
+}
+
+fn flush_pending_tools(blocks: &mut Vec<TimelineBlock>, pending: &mut Vec<ToolCallBlock>) {
+    if pending.is_empty() {
+        return;
+    }
+    if let Some(last) = blocks.iter_mut().rev().find(|block| block.role == "assistant") {
+        last.tool_calls.append(pending);
+        return;
+    }
+    let mut block = TimelineBlock {
+        id: format!("tool-host-{}", blocks.len()),
+        role: "assistant".to_string(),
+        content: String::new(),
+        editable: false,
+        edit_target: String::new(),
+        source_meta: json!({ "itemType": "tool_calls" }),
+        tool_calls: Vec::new(),
+    };
+    block.tool_calls.append(pending);
+    blocks.push(block);
+}
+
+fn parse_transcript_blocks(composer_id: &str, raw: &str, path: &Path) -> Vec<TimelineBlock> {
+    let mut blocks = Vec::new();
+    let mut pending_tools = Vec::new();
+
+    for (line_index, line) in raw.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if entry.get("type").and_then(Value::as_str) == Some("turn_ended") {
+            continue;
+        }
+        let Some(role) = entry.get("role").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(parts) = entry
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+
+        for (part_index, part) in parts.iter().enumerate() {
+            let part_type = part.get("type").and_then(Value::as_str).unwrap_or_default();
+            match (role, part_type) {
+                ("user" | "assistant", "text") => {
+                    let text = part
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    let mut block = TimelineBlock {
+                        id: format!("{line_index}:{part_index}:{role}"),
+                        role: role.to_string(),
+                        content: text,
+                        editable: false,
+                        edit_target: String::new(),
+                        source_meta: json!({
+                            "composerId": composer_id,
+                            "lineIndex": line_index,
+                            "partIndex": part_index,
+                            "source": "agent-transcript",
+                            "path": path.display().to_string(),
+                        }),
+                        tool_calls: Vec::new(),
+                    };
+                    if role == "assistant" {
+                        block.tool_calls.append(&mut pending_tools);
+                    } else {
+                        flush_pending_tools(&mut blocks, &mut pending_tools);
+                    }
+                    blocks.push(block);
+                }
+                ("assistant", "tool_use") => {
+                    let name = part
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("tool")
+                        .to_string();
+                    let id = part
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| format!("transcript-tool-{line_index}-{part_index}"));
+                    let input = part
+                        .get("input")
+                        .and_then(|value| serde_json::to_string_pretty(value).ok());
+                    let tool_call = ToolCallBlock {
+                        id,
+                        name,
+                        kind: "tool_use".to_string(),
+                        status: "completed".to_string(),
+                        input,
+                        output: None,
+                        error: None,
+                        started_at: None,
+                        ended_at: None,
+                        source_meta: json!({
+                            "composerId": composer_id,
+                            "lineIndex": line_index,
+                            "partIndex": part_index,
+                            "source": "agent-transcript",
+                        }),
+                    };
+                    attach_or_pending_tool(&mut blocks, &mut pending_tools, tool_call);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    flush_pending_tools(&mut blocks, &mut pending_tools);
+    blocks
+}
+
 fn cursor_rich_text(text: &str) -> String {
     let content: Vec<Value> = text
         .split('\n')
@@ -615,17 +1331,6 @@ fn cursor_rich_text(text: &str) -> String {
         })
         .collect();
     serde_json::to_string(&json!({ "type": "doc", "content": content })).unwrap_or_default()
-}
-
-fn escape_like(value: &str) -> String {
-    let mut escaped = String::new();
-    for ch in value.chars() {
-        if matches!(ch, '%' | '_' | '\\') {
-            escaped.push('\\');
-        }
-        escaped.push(ch);
-    }
-    escaped
 }
 
 fn row_text(row: &Row<'_>, index: usize) -> rusqlite::Result<String> {
@@ -717,56 +1422,145 @@ mod tests {
     }
 
     #[test]
-    fn unlabeled_empty_headers_are_not_shown() {
-        let conn = Connection::open_in_memory().expect("sqlite");
-        conn.execute_batch("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT);")
-            .expect("schema");
-        let platform = CursorPlatform::new(PathBuf::new());
-        let empty = CursorComposerHeader {
-            composer_id: "empty".to_string(),
+    fn tool_former_parses_stringified_params_and_result() {
+        let bubble = CursorBubble {
+            bubble_id: "b1".to_string(),
+            bubble_type: Some(2),
+            capability_type: Some(15),
+            tool_former_data: Some(json!({
+                "name": "read_file",
+                "toolCallId": "tool_1",
+                "status": "completed",
+                "rawArgs": "{\"target_file\":\"a.rs\"}",
+                "result": "{\"contents\":\"ok\"}"
+            })),
             ..Default::default()
         };
-
-        conn.execute(
-            "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
-            rusqlite::params![
-                "composerData:empty",
-                r#"{"composerId":"empty","fullConversationHeadersOnly":[]}"#
-            ],
-        )
-        .expect("insert composer");
-
-        assert!(!platform.should_show_list_item(&conn, &empty));
+        let tool = tool_former_to_block("c1", "b1", &bubble).expect("tool");
+        assert_eq!(tool.name, "read_file");
+        assert_eq!(tool.status, "completed");
+        assert_eq!(tool.input.as_deref(), Some("{\"target_file\":\"a.rs\"}"));
+        assert_eq!(tool.output.as_deref(), Some("{\"contents\":\"ok\"}"));
     }
 
     #[test]
-    fn unlabeled_headers_with_messages_are_shown() {
-        let conn = Connection::open_in_memory().expect("sqlite");
-        conn.execute_batch("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT);")
-            .expect("schema");
+    fn blocks_attach_tools_to_previous_assistant() {
         let platform = CursorPlatform::new(PathBuf::new());
-        let header = CursorComposerHeader {
-            composer_id: "real".to_string(),
+        let data = CursorComposerData {
+            composer_id: "c1".to_string(),
+            full_conversation_headers_only: vec![
+                CursorConversationHeader {
+                    bubble_id: "u1".to_string(),
+                    bubble_type: Some(1),
+                },
+                CursorConversationHeader {
+                    bubble_id: "a1".to_string(),
+                    bubble_type: Some(2),
+                },
+                CursorConversationHeader {
+                    bubble_id: "t1".to_string(),
+                    bubble_type: Some(2),
+                },
+            ],
+            ..Default::default()
+        };
+        let mut bubbles = HashMap::new();
+        bubbles.insert(
+            "u1".to_string(),
+            CursorBubble {
+                bubble_id: "u1".to_string(),
+                bubble_type: Some(1),
+                text: "hi".to_string(),
+                ..Default::default()
+            },
+        );
+        bubbles.insert(
+            "a1".to_string(),
+            CursorBubble {
+                bubble_id: "a1".to_string(),
+                bubble_type: Some(2),
+                text: "working".to_string(),
+                ..Default::default()
+            },
+        );
+        bubbles.insert(
+            "t1".to_string(),
+            CursorBubble {
+                bubble_id: "t1".to_string(),
+                bubble_type: Some(2),
+                capability_type: Some(15),
+                tool_former_data: Some(json!({
+                    "name": "grep",
+                    "toolCallId": "tool_grep",
+                    "status": "completed",
+                    "rawArgs": "{\"pattern\":\"foo\"}",
+                    "result": "[]"
+                })),
+                ..Default::default()
+            },
+        );
+
+        let blocks = platform.blocks_from_composer("c1", &data, &bubbles);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].role, "user");
+        assert_eq!(blocks[1].role, "assistant");
+        assert_eq!(blocks[1].tool_calls.len(), 1);
+        assert_eq!(blocks[1].tool_calls[0].name, "grep");
+    }
+
+    #[test]
+    fn transcript_parser_reads_text_and_tool_use() {
+        let raw = r#"
+{"role":"user","message":{"content":[{"type":"text","text":"hello"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"sure"},{"type":"tool_use","name":"Read","input":{"path":"a.rs"}}]}}
+{"type":"turn_ended","status":"success"}
+"#;
+        let blocks = parse_transcript_blocks("cid", raw, Path::new("x.jsonl"));
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].role, "user");
+        assert_eq!(blocks[1].role, "assistant");
+        assert_eq!(blocks[1].tool_calls.len(), 1);
+        assert_eq!(blocks[1].tool_calls[0].name, "Read");
+        assert!(!blocks[1].editable);
+    }
+
+    #[test]
+    fn unlabeled_empty_headers_without_local_data_are_hidden() {
+        let platform = CursorPlatform::new(PathBuf::from(
+            "definitely-missing-cursor-home-for-unit-test",
+        ));
+        let empty = CursorComposerHeader {
+            composer_id: "empty-not-a-real-composer".to_string(),
+            ..Default::default()
+        };
+        assert!(!platform.should_show_list_item(&empty));
+    }
+
+    #[test]
+    fn bubble_visibility_includes_tools_and_thinking() {
+        let text_bubble = CursorBubble {
+            bubble_id: "b1".to_string(),
+            bubble_type: Some(1),
+            text: "hello".to_string(),
+            ..Default::default()
+        };
+        let tool_bubble = CursorBubble {
+            bubble_id: "b2".to_string(),
+            bubble_type: Some(2),
+            capability_type: Some(15),
+            tool_former_data: Some(json!({"name": "read_file", "status": "completed"})),
+            ..Default::default()
+        };
+        let thinking_bubble = CursorBubble {
+            bubble_id: "b3".to_string(),
+            bubble_type: Some(2),
+            capability_type: Some(30),
+            thinking: Some(json!({"text": "planning next step"})),
             ..Default::default()
         };
 
-        conn.execute(
-            "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
-            rusqlite::params![
-                "composerData:real",
-                r#"{"composerId":"real","fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}"#
-            ],
-        )
-        .expect("insert composer");
-        conn.execute(
-            "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
-            rusqlite::params![
-                "bubbleId:real:b1",
-                r#"{"bubbleId":"b1","type":1,"text":"hello"}"#
-            ],
-        )
-        .expect("insert bubble");
-
-        assert!(platform.should_show_list_item(&conn, &header));
+        assert!(bubble_has_visible_content(&text_bubble, Some(1)));
+        assert!(bubble_has_visible_content(&tool_bubble, Some(2)));
+        assert!(bubble_has_visible_content(&thinking_bubble, Some(2)));
     }
 }

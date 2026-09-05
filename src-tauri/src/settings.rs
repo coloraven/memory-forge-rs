@@ -50,6 +50,7 @@ fn default_visible_platforms() -> Vec<String> {
     vec![
         "claude".to_string(),
         "codex".to_string(),
+        "cursor".to_string(),
         "opencode".to_string(),
         "grok".to_string(),
         "pi".to_string(),
@@ -94,16 +95,40 @@ fn migrate_settings(mut settings: AppSettings) -> AppSettings {
         "pi".to_string(),
         "grok".to_string(),
     ];
+    let legacy_default_without_cursor_current = vec![
+        "claude".to_string(),
+        "codex".to_string(),
+        "opencode".to_string(),
+        "grok".to_string(),
+        "pi".to_string(),
+    ];
 
     if settings.visible_platforms == legacy_default_without_cursor
         || settings.visible_platforms == legacy_default_with_cursor
         || settings.visible_platforms == legacy_default_with_pi
         || settings.visible_platforms == legacy_default_with_grok_after_pi
+        || settings.visible_platforms == legacy_default_without_cursor_current
     {
         settings.visible_platforms = default_visible_platforms();
+        settings.navigation_items = Some(default_navigation_items(&settings.visible_platforms));
     }
 
     if settings.navigation_items.is_none() {
+        settings.navigation_items = Some(default_navigation_items(&settings.visible_platforms));
+    }
+
+    // Upgrade the previous default nav (no Cursor) when platforms already include Cursor defaults.
+    let legacy_nav_without_cursor = vec![
+        "claude".to_string(),
+        "codex".to_string(),
+        "terminal-sessions".to_string(),
+        "opencode".to_string(),
+        "grok".to_string(),
+        "pi".to_string(),
+    ];
+    if settings.navigation_items.as_ref() == Some(&legacy_nav_without_cursor)
+        && settings.visible_platforms == default_visible_platforms()
+    {
         settings.navigation_items = Some(default_navigation_items(&settings.visible_platforms));
     }
 

@@ -36,7 +36,7 @@ const defaultSettings = {
   grokHome: null,
   piHome: null,
   preferredTerminal: null,
-  visiblePlatforms: ["claude", "codex", "opencode", "grok", "pi"] as string[],
+  visiblePlatforms: ["claude", "codex", "cursor", "opencode", "grok", "pi"] as string[],
   navigationItems: [
     "claude",
     "codex",

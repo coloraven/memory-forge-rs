@@ -104,7 +104,7 @@ export default function DashboardPage() {
   const { snapshot, loading, t, state, dispatch } = useDesktop();
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
-  const visiblePlatforms = snapshot?.settings?.visiblePlatforms ?? ["claude", "codex", "opencode", "grok", "pi"];
+  const visiblePlatforms = snapshot?.settings?.visiblePlatforms ?? ["claude", "codex", "cursor", "opencode", "grok", "pi"];
   const visiblePlatformsKey = visiblePlatforms.join("|");
   const snapshotReady = Boolean(snapshot);
 

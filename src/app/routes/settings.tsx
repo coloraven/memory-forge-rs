@@ -101,6 +101,7 @@ export default function SettingsPage() {
   const visiblePlatforms = snapshot.settings.visiblePlatforms ?? [
     "claude",
     "codex",
+    "cursor",
     "opencode",
     "grok",
     "pi",
@@ -109,6 +110,7 @@ export default function SettingsPage() {
     "claude",
     "codex",
     "terminal-sessions",
+    "cursor",
     "opencode",
     "grok",
     "pi",
