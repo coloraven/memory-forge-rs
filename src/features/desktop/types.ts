@@ -9,6 +9,7 @@ export type DesktopSettings = {
   closeToTrayOnClose: boolean;
   launchOnStartup: boolean;
   reduceMotion: boolean;
+  renderMarkdown: boolean;
   claudeHome: string | null;
   codexHome: string | null;
   codexProjectRoot: string | null;

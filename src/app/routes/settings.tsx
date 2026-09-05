@@ -87,6 +87,7 @@ export default function SettingsPage() {
     setCloseToTrayOnClose,
     setLaunchOnStartup,
     setReduceMotion,
+    setRenderMarkdown,
     updateSettings,
   } = useDesktop();
   const [draggingPlatformId, setDraggingPlatformId] = useState<string | null>(null);
@@ -295,6 +296,12 @@ export default function SettingsPage() {
               description={t("reduceMotionDesc")}
               label={t("reduceMotion")}
               onToggle={setReduceMotion}
+            />
+            <ToggleRow
+              checked={snapshot.settings.renderMarkdown ?? true}
+              description={t("renderMarkdownDesc")}
+              label={t("renderMarkdown")}
+              onToggle={setRenderMarkdown}
             />
           </div>
         </section>

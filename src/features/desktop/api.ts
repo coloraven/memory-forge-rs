@@ -25,6 +25,7 @@ const defaultSettings = {
   closeToTrayOnClose: true,
   launchOnStartup: false,
   reduceMotion: false,
+  renderMarkdown: true,
   claudeHome: null,
   codexHome: null,
   codexProjectRoot: null,

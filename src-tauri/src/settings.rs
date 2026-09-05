@@ -18,6 +18,8 @@ pub struct AppSettings {
     pub close_to_tray_on_close: bool,
     pub launch_on_startup: bool,
     pub reduce_motion: bool,
+    #[serde(default = "default_true")]
+    pub render_markdown: bool,
     #[serde(default)]
     pub claude_home: Option<String>,
     #[serde(default)]
@@ -52,6 +54,10 @@ pub struct AppSettings {
     pub visible_platforms: Vec<String>,
     #[serde(default)]
     pub navigation_items: Option<Vec<String>>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_visible_platforms() -> Vec<String> {
@@ -220,6 +226,7 @@ impl Default for AppSettings {
             close_to_tray_on_close: true,
             launch_on_startup: false,
             reduce_motion: false,
+            render_markdown: true,
             claude_home: None,
             codex_home: None,
             codex_project_root: None,
@@ -249,6 +256,7 @@ pub struct AppSettingsPatch {
     pub close_to_tray_on_close: Option<bool>,
     pub launch_on_startup: Option<bool>,
     pub reduce_motion: Option<bool>,
+    pub render_markdown: Option<bool>,
     pub claude_home: Option<Option<String>>,
     pub codex_home: Option<Option<String>>,
     pub codex_project_root: Option<Option<String>>,
@@ -357,6 +365,9 @@ pub fn update_settings(
 
     if let Some(reduce_motion) = patch.reduce_motion {
         settings.reduce_motion = reduce_motion;
+    }
+    if let Some(render_markdown) = patch.render_markdown {
+        settings.render_markdown = render_markdown;
     }
 
     if let Some(claude_home) = patch.claude_home {

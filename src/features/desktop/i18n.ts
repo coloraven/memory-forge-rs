@@ -45,6 +45,8 @@ export type MessageKey =
   | "launchOnStartupDesc"
   | "reduceMotion"
   | "reduceMotionDesc"
+  | "renderMarkdown"
+  | "renderMarkdownDesc"
   | "terminalSection"
   | "terminalSectionDesc"
   | "preferredTerminal"
@@ -154,6 +156,7 @@ export type MessageKey =
   | "session.editMessage"
   | "session.editWarning"
   | "session.editThisMessage"
+  | "session.editAsSource"
   | "session.enterContent"
   | "session.saveChanges"
   | "session.saveFailed"
@@ -374,6 +377,8 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     launchOnStartupDesc: "让应用跟随系统启动。",
     reduceMotion: "减少动画",
     reduceMotionDesc: "对低性能设备更友好。",
+    renderMarkdown: "Markdown 渲染消息",
+    renderMarkdownDesc: "浏览时渲染 Markdown；编辑时始终显示源码。",
     terminalSection: "首选终端",
     terminalSectionDesc: "恢复会话时使用的终端应用。",
     preferredTerminal: "终端应用",
@@ -479,6 +484,7 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "session.editMessage": "编辑消息",
     "session.editWarning": "修改消息会直接影响 AI 的上下文记忆，请谨慎操作。",
     "session.editThisMessage": "编辑此消息",
+    "session.editAsSource": "编辑以 Markdown 源码显示",
     "session.enterContent": "输入内容...",
     "session.saveChanges": "保存修改",
     "session.saveFailed": "保存失败",
@@ -697,6 +703,8 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     launchOnStartupDesc: "Let the app follow system startup.",
     reduceMotion: "Reduce motion",
     reduceMotionDesc: "Better for lower-powered machines.",
+    renderMarkdown: "Render messages as Markdown",
+    renderMarkdownDesc: "Render Markdown while browsing; always show source when editing.",
     terminalSection: "Preferred Terminal",
     terminalSectionDesc: "Terminal app used when resuming sessions.",
     preferredTerminal: "Terminal app",
@@ -802,6 +810,7 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "session.editMessage": "Edit Message",
     "session.editWarning": "Editing messages directly affects AI's context memory. Proceed with caution.",
     "session.editThisMessage": "Edit this message",
+    "session.editAsSource": "Editing always shows Markdown source",
     "session.enterContent": "Enter content...",
     "session.saveChanges": "Save Changes",
     "session.saveFailed": "Save failed",

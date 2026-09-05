@@ -91,12 +91,16 @@ export function EditMessageDialog() {
           </div>
 
           <div className="space-y-2">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">{t('editLog.after')}</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">{t('editLog.after')}</p>
+              <p className="text-[10px] text-muted-foreground/80">{t('session.editAsSource')}</p>
+            </div>
             <Textarea
               value={editingBlock.content}
               onChange={(e) => dispatch({ type: 'setEditingBlock', payload: { ...editingBlock, content: e.target.value } })}
               className="min-h-[280px] bg-background/90 font-mono text-sm md:min-h-[360px]"
               placeholder={t('session.enterContent')}
+              spellCheck={false}
             />
           </div>
 

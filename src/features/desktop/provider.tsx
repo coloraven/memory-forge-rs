@@ -119,6 +119,7 @@ type DesktopContextValue = {
   setCloseToTrayOnClose: (enabled: boolean) => Promise<void>;
   setLaunchOnStartup: (enabled: boolean) => Promise<void>;
   setReduceMotion: (enabled: boolean) => Promise<void>;
+  setRenderMarkdown: (enabled: boolean) => Promise<void>;
 };
 
 const DesktopContext = createContext<DesktopContextValue | null>(null);
@@ -221,6 +222,7 @@ export function DesktopProvider({ children }: { children: ReactNode }) {
       setCloseToTrayOnClose: async (enabled) => updateSettings({ closeToTrayOnClose: enabled }),
       setLaunchOnStartup: async (enabled) => updateSettings({ launchOnStartup: enabled }),
       setReduceMotion: async (enabled) => updateSettings({ reduceMotion: enabled }),
+      setRenderMarkdown: async (enabled) => updateSettings({ renderMarkdown: enabled }),
     }),
     [snapshot, loading, saving, notice, error, state, t],
   );

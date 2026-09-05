@@ -14,6 +14,7 @@ import { save } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { useTerminal } from '@/features/terminal/terminal-context'
 import { useNavigate } from 'react-router'
+import { MessageContent } from '@/features/session/message-content'
 
 const PAGE_SIZE = 50
 const TOOL_INPUT_EXPORT_LIMIT = 8192
@@ -1255,87 +1256,6 @@ export function SessionDetail() {
   )
 }
 
-function CodeBlockRenderer({ code, language }: { code: string; language: string }) {
-  const [copied, setCopied] = useState(false)
-  const handleCopy = async (e: React.MouseEvent) => {
-    e.stopPropagation()
-    try {
-      await navigator.clipboard.writeText(code)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch { /* ignore */ }
-  }
-
-  return (
-    <div className="my-3 overflow-hidden rounded-xl border border-border/40 bg-[#0b0e14] text-[#c9d1d9] font-mono text-xs shadow-md">
-      <div className="flex items-center justify-between bg-[#11151c] px-4 py-2 border-b border-border/30 text-[10px] text-muted-foreground select-none">
-        <span className="font-bold uppercase tracking-wider text-[#79c0ff]">{language || 'code'}</span>
-        <button
-          onClick={handleCopy}
-          className={cn(
-            "flex items-center gap-1.5 hover:text-foreground transition-colors px-2.5 py-1 rounded bg-white/5 border border-border/20",
-            copied && "text-green-400 bg-green-500/10 border-green-500/20"
-          )}
-        >
-          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-          {copied ? 'Copied' : 'Copy'}
-        </button>
-      </div>
-      <pre className="p-4 overflow-x-auto whitespace-pre leading-relaxed">{code}</pre>
-    </div>
-  )
-}
-
-function parseContentWithCodeBlocks(text: string, searchHighlight?: string) {
-  if (!text) return ''
-
-  const highlightWord = (val: string) => {
-    if (!searchHighlight) return val
-    const regex = new RegExp(`(${searchHighlight.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
-    const parts = val.split(regex)
-    if (parts.length === 1) return val
-    return parts.map((part, i) =>
-      regex.test(part)
-        ? <mark key={i} className="bg-amber-400/35 text-foreground rounded-sm px-0.5">{part}</mark>
-        : part
-    )
-  }
-
-  const parts: React.ReactNode[] = [];
-  const regex = /```(\w*)\n([\s\S]*?)```/g;
-  let lastIndex = 0;
-  let match;
-  let key = 0;
-
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(
-        <span key={key++} className="whitespace-pre-wrap leading-relaxed text-sm">
-          {highlightWord(text.slice(lastIndex, match.index))}
-        </span>
-      );
-    }
-    parts.push(
-      <CodeBlockRenderer
-        key={key++}
-        language={match[1]}
-        code={match[2]?.trim()}
-      />
-    );
-    lastIndex = regex.lastIndex;
-  }
-
-  if (lastIndex < text.length) {
-    parts.push(
-      <span key={key++} className="whitespace-pre-wrap leading-relaxed text-sm">
-        {highlightWord(text.slice(lastIndex))}
-      </span>
-    );
-  }
-
-  return parts.length > 0 ? parts : text;
-}
-
 function cleanAnsiCodes(text: string): string {
   if (!text) return ''
   return text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').replace(/\[[0-9;]+m/g, '')
@@ -1451,6 +1371,8 @@ const MessageBlock = forwardRef<HTMLDivElement, {
   isSearchMatch?: boolean
   isCurrentMatch?: boolean
 }>(function MessageBlock({ block, index, onEdit, onErase, onEraseToolCall, canEraseToolCalls, erasingToolCallId, onLoadExecutionOutput, loadingExecutionOutput, t, searchHighlight, isCurrentMatch }, ref) {
+  const { snapshot } = useDesktop()
+  const renderMarkdown = snapshot?.settings?.renderMarkdown ?? true
   const [thinkingExpanded, setThinkingExpanded] = useState(false)
   const [longContentExpanded, setLongContentExpanded] = useState(false)
 
@@ -1532,17 +1454,18 @@ const MessageBlock = forwardRef<HTMLDivElement, {
             {hasContent && (
               (!isThinking || thinkingExpanded) ? (
                 <div className="space-y-2">
-                  <div className={cn(
-                    "overflow-hidden rounded-xl p-4 bg-background/55 border border-border/30",
-                    isThinking && "bg-amber-500/3 border-dashed border-amber-500/20"
-                  )}>
                     <div className={cn(
-                      "text-sm font-sans leading-relaxed text-foreground whitespace-pre-wrap break-words",
-                      isThinking && "font-mono text-xs text-quiet"
+                      "overflow-hidden rounded-xl p-4 bg-background/55 border border-border/30",
+                      isThinking && "bg-amber-500/3 border-dashed border-amber-500/20"
                     )}>
-                      {parseContentWithCodeBlocks(displayContent, searchHighlight)}
+                      <MessageContent
+                        text={displayContent}
+                        searchHighlight={searchHighlight}
+                        renderMarkdown={renderMarkdown && !isThinking}
+                        plainClassName={isThinking ? "font-mono text-xs text-quiet" : undefined}
+                        className={isThinking ? "font-mono text-xs text-quiet" : undefined}
+                      />
                     </div>
-                  </div>
                   {isLongContent && !isSearchHit && (
                     <button
                       type="button"
