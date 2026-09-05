@@ -285,6 +285,42 @@ impl PlatformAdapter for KiroPlatform {
         )
     }
 
+    fn uses_keyed_list_paging(&self) -> bool {
+        true
+    }
+
+    fn session_list_item(
+        &self,
+        session_key: &str,
+        alias_map: &HashMap<String, String>,
+        _cache: Option<&crate::database::SessionSummaryCache<'_>>,
+    ) -> Option<SessionListItem> {
+        let meta_path = self.sessions_dir.join(format!("{session_key}.json"));
+        let summary = self.scan_meta(&meta_path)?;
+        let alias = alias_map.get(session_key).cloned().unwrap_or_default();
+        Some(SessionListItem {
+            platform: "kiro".to_string(),
+            session_key: session_key.to_string(),
+            session_id: session_key.to_string(),
+            display_title: if !alias.is_empty() {
+                alias.clone()
+            } else if !summary.title.is_empty() {
+                summary.title
+            } else {
+                session_key.chars().take(8).collect()
+            },
+            alias_title: alias,
+            preview: summary.preview,
+            updated_at: modified_nanos(&meta_path).to_string(),
+            cwd: summary.cwd,
+            editable: true,
+            content_matches: vec![],
+            total_content_matches: 0,
+            favorite: false,
+            agent_group: None,
+        })
+    }
+
     fn get_session_detail(
         &self,
         session_key: &str,

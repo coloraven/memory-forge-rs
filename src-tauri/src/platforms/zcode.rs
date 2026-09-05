@@ -268,6 +268,10 @@ impl super::PlatformAdapter for ZCodePlatform {
         Some(rows.flatten().collect())
     }
 
+    fn uses_keyed_list_paging(&self) -> bool {
+        true
+    }
+
     fn session_list_item(
         &self,
         session_key: &str,

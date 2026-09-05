@@ -273,6 +273,47 @@ impl PlatformAdapter for Chat2DbPlatform {
         )
     }
 
+    fn uses_keyed_list_paging(&self) -> bool {
+        true
+    }
+
+    fn session_list_item(
+        &self,
+        session_key: &str,
+        alias_map: &HashMap<String, String>,
+        _cache: Option<&crate::database::SessionSummaryCache<'_>>,
+    ) -> Option<SessionListItem> {
+        let entry = self
+            .list_index_entries()
+            .into_iter()
+            .find(|entry| entry.id == session_key)?;
+        let alias = alias_map.get(&entry.id).cloned().unwrap_or_default();
+        let display_title = if alias.is_empty() {
+            if entry.title.trim().is_empty() {
+                entry.id.clone()
+            } else {
+                entry.title.clone()
+            }
+        } else {
+            alias.clone()
+        };
+        Some(SessionListItem {
+            platform: self.flavor.platform_id().to_string(),
+            session_key: entry.id.clone(),
+            session_id: entry.id.clone(),
+            display_title,
+            alias_title: alias,
+            preview: entry.title,
+            updated_at: gmt_to_millis(entry.gmt_modified.as_ref()).to_string(),
+            cwd: self.home.display().to_string(),
+            editable: true,
+            content_matches: Vec::new(),
+            total_content_matches: 0,
+            favorite: false,
+            agent_group: None,
+        })
+    }
+
     fn list_sessions(
         &self,
         alias_map: &HashMap<String, String>,

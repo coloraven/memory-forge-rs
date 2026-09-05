@@ -390,8 +390,9 @@ pub fn session_list(
             Some(&summary_cache),
         );
         crate::app_log::perf(format!(
-            "session_list({platform}) paginated {} items: {:?}",
+            "session_list({platform}) paginated total={} page={} items: {:?}",
             page_result.total,
+            page_result.items.len(),
             t1.elapsed()
         ));
         crate::app_log::perf(format!("session_list({platform}) total: {:?}", t0.elapsed()));
@@ -414,45 +415,47 @@ fn list_sessions_page(
     show_archived: bool,
     summary_cache: Option<&database::SessionSummaryCache<'_>>,
 ) -> SessionListResult {
-    if let Some(mut keys) = adapter.list_session_keys() {
-        keys.retain(|item| {
-            let is_archived = archived.contains(&item.key);
-            if show_archived {
-                is_archived
-            } else {
-                !is_archived
+    if adapter.uses_keyed_list_paging() {
+        if let Some(mut keys) = adapter.list_session_keys() {
+            keys.retain(|item| {
+                let is_archived = archived.contains(&item.key);
+                if show_archived {
+                    is_archived
+                } else {
+                    !is_archived
+                }
+            });
+            keys.sort_by(|a, b| {
+                favorites
+                    .contains(&b.key)
+                    .cmp(&favorites.contains(&a.key))
+                    .then_with(|| b.sort_key.cmp(&a.sort_key))
+            });
+
+            let (root_indices, children) = session_key_graph(&keys);
+            let total = root_indices.len();
+            let page_roots: Vec<usize> = root_indices
+                .into_iter()
+                .skip(offset.min(total))
+                .take(limit.unwrap_or(usize::MAX))
+                .collect();
+            let mut page_indices = Vec::new();
+            for root in page_roots {
+                collect_descendant_indices(root, &children, &mut page_indices);
             }
-        });
-        keys.sort_by(|a, b| {
-            favorites
-                .contains(&b.key)
-                .cmp(&favorites.contains(&a.key))
-                .then_with(|| b.sort_key.cmp(&a.sort_key))
-        });
 
-        let (root_indices, children) = session_key_graph(&keys);
-        let total = root_indices.len();
-        let page_roots: Vec<usize> = root_indices
-            .into_iter()
-            .skip(offset.min(total))
-            .take(limit.unwrap_or(usize::MAX))
-            .collect();
-        let mut page_indices = Vec::new();
-        for root in page_roots {
-            collect_descendant_indices(root, &children, &mut page_indices);
+            let items = page_indices
+                .into_iter()
+                .filter_map(|index| adapter.session_list_item(&keys[index].key, aliases, summary_cache))
+                .map(|mut item| {
+                    item.favorite = favorites.contains(&item.session_key);
+                    item
+                })
+                .collect();
+            let items = group_session_items(items);
+
+            return SessionListResult { total, items };
         }
-
-        let items = page_indices
-            .into_iter()
-            .filter_map(|index| adapter.session_list_item(&keys[index].key, aliases, summary_cache))
-            .map(|mut item| {
-                item.favorite = favorites.contains(&item.session_key);
-                item
-            })
-            .collect();
-        let items = group_session_items(items);
-
-        return SessionListResult { total, items };
     }
 
     let mut items = adapter

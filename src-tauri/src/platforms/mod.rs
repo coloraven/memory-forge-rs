@@ -152,6 +152,12 @@ pub trait PlatformAdapter: Send + Sync {
     fn list_session_keys(&self) -> Option<Vec<SessionKey>> {
         None
     }
+    /// When true, `list_sessions_page` pages via `list_session_keys` + `session_list_item`.
+    /// Platforms that only implement `list_session_keys` for content-index warmup must leave
+    /// this false, otherwise the list UI gets an empty page (`session_list_item` defaults to None).
+    fn uses_keyed_list_paging(&self) -> bool {
+        false
+    }
     fn session_list_item(
         &self,
         _session_key: &str,

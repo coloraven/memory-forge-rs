@@ -657,6 +657,48 @@ impl PlatformAdapter for KiroIdePlatform {
         Some(keys)
     }
 
+    fn uses_keyed_list_paging(&self) -> bool {
+        true
+    }
+
+    fn session_list_item(
+        &self,
+        session_key: &str,
+        alias_map: &HashMap<String, String>,
+        _cache: Option<&crate::database::SessionSummaryCache<'_>>,
+    ) -> Option<SessionListItem> {
+        let (workspace_key, session_id) = Self::parse_session_key(session_key)?;
+        let entry = self
+            .read_index(workspace_key)
+            .into_iter()
+            .find(|entry| entry.session_id == session_id)?;
+        let alias = alias_map.get(session_key).cloned().unwrap_or_default();
+        let display_title = if alias.is_empty() {
+            if entry.title.trim().is_empty() {
+                entry.session_id.clone()
+            } else {
+                entry.title.clone()
+            }
+        } else {
+            alias.clone()
+        };
+        Some(SessionListItem {
+            platform: "kiro-ide".to_string(),
+            session_key: session_key.to_string(),
+            session_id: entry.session_id.clone(),
+            display_title,
+            alias_title: alias,
+            preview: self.preview(workspace_key, &entry.session_id),
+            updated_at: entry.date_created,
+            cwd: entry.workspace_directory,
+            editable: true,
+            content_matches: vec![],
+            total_content_matches: 0,
+            favorite: false,
+            agent_group: None,
+        })
+    }
+
     fn get_session_detail(
         &self,
         session_key: &str,

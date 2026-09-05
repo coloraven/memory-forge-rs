@@ -471,6 +471,49 @@ impl PlatformAdapter for GeminiPlatform {
         )
     }
 
+    fn uses_keyed_list_paging(&self) -> bool {
+        true
+    }
+
+    fn session_list_item(
+        &self,
+        session_key: &str,
+        alias_map: &HashMap<String, String>,
+        _cache: Option<&SessionSummaryCache<'_>>,
+    ) -> Option<SessionListItem> {
+        let (project_name, source, _stem) = Self::parse_key(session_key)?;
+        let path = self.key_to_path(session_key)?;
+        let cwd = self
+            .read_project_root(source, project_name)
+            .unwrap_or_else(|| project_name.to_string());
+        let scan = Self::quick_scan(&path)?;
+        let alias_title = alias_map.get(session_key).cloned().unwrap_or_default();
+        let display_title = if alias_title.is_empty() {
+            let date = scan
+                .start_time
+                .get(..10)
+                .unwrap_or(scan.start_time.as_str());
+            format!("{project_name} · {date}")
+        } else {
+            alias_title.clone()
+        };
+        Some(SessionListItem {
+            platform: "gemini".to_string(),
+            session_key: session_key.to_string(),
+            session_id: scan.session_id,
+            display_title,
+            alias_title,
+            preview: scan.preview,
+            updated_at: scan.last_updated,
+            cwd,
+            editable: true,
+            content_matches: vec![],
+            total_content_matches: 0,
+            favorite: false,
+            agent_group: None,
+        })
+    }
+
     fn get_session_detail(
         &self,
         session_key: &str,

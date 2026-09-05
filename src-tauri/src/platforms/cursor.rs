@@ -895,6 +895,8 @@ impl CursorComposerData {
 }
 
 impl PlatformAdapter for CursorPlatform {
+    // list_session_keys is for content-index warmup only; keyed paging stays off because
+    // session_list_item is not implemented (would re-scan headers per row).
     fn list_session_keys(&self) -> Option<Vec<SessionKey>> {
         let conn = self.connect_readonly().ok();
         if conn.is_none()

@@ -430,6 +430,10 @@ impl PlatformAdapter for PiPlatform {
         )
     }
 
+    fn uses_keyed_list_paging(&self) -> bool {
+        true
+    }
+
     fn session_list_item(
         &self,
         session_key: &str,
