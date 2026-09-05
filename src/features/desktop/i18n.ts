@@ -47,6 +47,9 @@ export type MessageKey =
   | "reduceMotionDesc"
   | "renderMarkdown"
   | "renderMarkdownDesc"
+  | "recordProgramLogs"
+  | "recordProgramLogsDesc"
+  | "recordProgramLogsPath"
   | "terminalSection"
   | "terminalSectionDesc"
   | "preferredTerminal"
@@ -379,6 +382,9 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     reduceMotionDesc: "对低性能设备更友好。",
     renderMarkdown: "Markdown 渲染消息",
     renderMarkdownDesc: "浏览时渲染 Markdown；编辑时始终显示源码。",
+    recordProgramLogs: "记录程序日志",
+    recordProgramLogsDesc: "将性能与排查日志写入本地文件（含 Cursor 分阶段耗时）。默认关闭。",
+    recordProgramLogsPath: "日志文件",
     terminalSection: "首选终端",
     terminalSectionDesc: "恢复会话时使用的终端应用。",
     preferredTerminal: "终端应用",
@@ -705,6 +711,9 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     reduceMotionDesc: "Better for lower-powered machines.",
     renderMarkdown: "Render messages as Markdown",
     renderMarkdownDesc: "Render Markdown while browsing; always show source when editing.",
+    recordProgramLogs: "Record program logs",
+    recordProgramLogsDesc: "Write performance diagnostics to a local log file (includes Cursor phase timings). Off by default.",
+    recordProgramLogsPath: "Log file",
     terminalSection: "Preferred Terminal",
     terminalSectionDesc: "Terminal app used when resuming sessions.",
     preferredTerminal: "Terminal app",

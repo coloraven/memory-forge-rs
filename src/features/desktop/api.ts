@@ -26,6 +26,7 @@ const defaultSettings = {
   launchOnStartup: false,
   reduceMotion: false,
   renderMarkdown: true,
+  recordProgramLogs: false,
   claudeHome: null,
   codexHome: null,
   codexProjectRoot: null,

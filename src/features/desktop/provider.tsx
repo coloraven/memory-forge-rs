@@ -120,6 +120,7 @@ type DesktopContextValue = {
   setLaunchOnStartup: (enabled: boolean) => Promise<void>;
   setReduceMotion: (enabled: boolean) => Promise<void>;
   setRenderMarkdown: (enabled: boolean) => Promise<void>;
+  setRecordProgramLogs: (enabled: boolean) => Promise<void>;
 };
 
 const DesktopContext = createContext<DesktopContextValue | null>(null);
@@ -223,6 +224,7 @@ export function DesktopProvider({ children }: { children: ReactNode }) {
       setLaunchOnStartup: async (enabled) => updateSettings({ launchOnStartup: enabled }),
       setReduceMotion: async (enabled) => updateSettings({ reduceMotion: enabled }),
       setRenderMarkdown: async (enabled) => updateSettings({ renderMarkdown: enabled }),
+      setRecordProgramLogs: async (enabled) => updateSettings({ recordProgramLogs: enabled }),
     }),
     [snapshot, loading, saving, notice, error, state, t],
   );

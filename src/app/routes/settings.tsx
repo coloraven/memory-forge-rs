@@ -88,6 +88,7 @@ export default function SettingsPage() {
     setLaunchOnStartup,
     setReduceMotion,
     setRenderMarkdown,
+    setRecordProgramLogs,
     updateSettings,
   } = useDesktop();
   const [draggingPlatformId, setDraggingPlatformId] = useState<string | null>(null);
@@ -302,6 +303,16 @@ export default function SettingsPage() {
               description={t("renderMarkdownDesc")}
               label={t("renderMarkdown")}
               onToggle={setRenderMarkdown}
+            />
+            <ToggleRow
+              checked={snapshot.settings.recordProgramLogs ?? false}
+              description={
+                snapshot.settings.recordProgramLogs
+                  ? `${t("recordProgramLogsDesc")} ${t("recordProgramLogsPath")}: ${snapshot.dataDir}/logs/memory-forge.log`
+                  : t("recordProgramLogsDesc")
+              }
+              label={t("recordProgramLogs")}
+              onToggle={setRecordProgramLogs}
             />
           </div>
         </section>

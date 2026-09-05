@@ -10,6 +10,7 @@ export type DesktopSettings = {
   launchOnStartup: boolean;
   reduceMotion: boolean;
   renderMarkdown: boolean;
+  recordProgramLogs: boolean;
   claudeHome: string | null;
   codexHome: string | null;
   codexProjectRoot: string | null;

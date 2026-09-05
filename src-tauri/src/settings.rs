@@ -21,6 +21,8 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub render_markdown: bool,
     #[serde(default)]
+    pub record_program_logs: bool,
+    #[serde(default)]
     pub claude_home: Option<String>,
     #[serde(default)]
     pub codex_home: Option<String>,
@@ -227,6 +229,7 @@ impl Default for AppSettings {
             launch_on_startup: false,
             reduce_motion: false,
             render_markdown: true,
+            record_program_logs: false,
             claude_home: None,
             codex_home: None,
             codex_project_root: None,
@@ -257,6 +260,7 @@ pub struct AppSettingsPatch {
     pub launch_on_startup: Option<bool>,
     pub reduce_motion: Option<bool>,
     pub render_markdown: Option<bool>,
+    pub record_program_logs: Option<bool>,
     pub claude_home: Option<Option<String>>,
     pub codex_home: Option<Option<String>>,
     pub codex_project_root: Option<Option<String>>,
@@ -298,12 +302,19 @@ pub struct SharedSettingsState {
 
 pub fn initialize(app: &AppHandle, state: &SharedSettingsState) -> Result<(), String> {
     let loaded = load_settings(app)?;
+    sync_app_log(app, &loaded);
     let mut guard = state
         .settings
         .lock()
         .map_err(|_| "failed to lock settings state".to_string())?;
     *guard = loaded;
     Ok(())
+}
+
+fn sync_app_log(app: &AppHandle, settings: &AppSettings) {
+    if let Ok(data_dir) = ensure_data_dir(app) {
+        crate::app_log::configure(settings.record_program_logs, &data_dir);
+    }
 }
 
 pub fn close_to_tray_enabled(state: &SharedSettingsState) -> bool {
@@ -368,6 +379,9 @@ pub fn update_settings(
     }
     if let Some(render_markdown) = patch.render_markdown {
         settings.render_markdown = render_markdown;
+    }
+    if let Some(record_program_logs) = patch.record_program_logs {
+        settings.record_program_logs = record_program_logs;
     }
 
     if let Some(claude_home) = patch.claude_home {
@@ -449,6 +463,7 @@ pub fn update_settings(
     };
 
     persist_settings(app, &settings)?;
+    sync_app_log(app, &settings);
 
     let db_path = ensure_data_dir(app)?.join("memory-forge.db");
     snapshot_from_settings(

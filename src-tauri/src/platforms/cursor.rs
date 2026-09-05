@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rusqlite::types::ValueRef;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row};
@@ -12,6 +12,7 @@ use super::{
     build_commands, extract_snippet, ContentMatch, PlatformAdapter, SessionDetail, SessionListItem,
     SessionListResult, TimelineBlock, ToolCallBlock,
 };
+use crate::app_log;
 
 const COMPOSER_HEADERS_KEY: &str = "composer.composerHeaders";
 const WORKSPACE_COMPOSER_DATA_KEY: &str = "composer.composerData";
@@ -320,7 +321,9 @@ impl CursorPlatform {
     }
 
     fn collect_headers(&self, conn: Option<&Connection>) -> Vec<CursorComposerHeader> {
+        let t0 = Instant::now();
         let mut by_id: HashMap<String, CursorComposerHeader> = HashMap::new();
+        let mut global_count = 0usize;
 
         if let Some(conn) = conn {
             let table_headers = Self::read_headers_from_table(conn).unwrap_or_default();
@@ -331,14 +334,23 @@ impl CursorPlatform {
             };
             for header in table_headers.into_iter().chain(item_headers) {
                 by_id.insert(header.composer_id.clone(), header);
+                global_count += 1;
             }
         }
+        let t_global = t0.elapsed();
 
-        for header in self.read_workspace_headers() {
+        let t_ws = Instant::now();
+        let workspace_headers = self.read_workspace_headers();
+        let workspace_count = workspace_headers.len();
+        for header in workspace_headers {
             by_id.entry(header.composer_id.clone()).or_insert(header);
         }
+        let t_workspace = t_ws.elapsed();
 
-        for transcript in self.discover_transcripts() {
+        let t_tr = Instant::now();
+        let transcripts = self.discover_transcripts();
+        let transcript_count = transcripts.len();
+        for transcript in transcripts {
             by_id.entry(transcript.composer_id.clone()).or_insert(
                 CursorComposerHeader {
                     composer_id: transcript.composer_id.clone(),
@@ -351,10 +363,19 @@ impl CursorPlatform {
                 },
             );
         }
+        let t_transcript = t_tr.elapsed();
 
         let mut headers: Vec<_> = by_id.into_values().collect();
         headers.retain(CursorComposerHeader::is_listable_index_entry);
         headers.sort_by_key(|header| std::cmp::Reverse(header.updated_at_value()));
+        app_log::perf(format!(
+            "cursor.collect_headers global={global_count} {:?} workspace={workspace_count} {:?} transcripts={transcript_count} {:?} merged={} total={:?}",
+            t_global,
+            t_workspace,
+            t_transcript,
+            headers.len(),
+            t0.elapsed()
+        ));
         headers
     }
 
@@ -707,6 +728,7 @@ impl PlatformAdapter for CursorPlatform {
         limit: Option<usize>,
         offset: usize,
     ) -> SessionListResult {
+        let t0 = Instant::now();
         let conn = self.connect_readonly().ok();
         if conn.is_none() && !self.workspace_storage_dir().is_dir() && default_cursor_projects_home().is_none()
         {
@@ -716,11 +738,21 @@ impl PlatformAdapter for CursorPlatform {
             };
         }
 
+        let t_collect = Instant::now();
         let mut headers = self.collect_headers(conn.as_ref());
+        let collected = headers.len();
+        let collect_elapsed = t_collect.elapsed();
+
+        let t_filter = Instant::now();
         headers.retain(|header| self.should_show_list_item(header));
+        let after_filter = headers.len();
+        let filter_elapsed = t_filter.elapsed();
+
+        let t_enrich = Instant::now();
         for header in &mut headers {
             self.enrich_header_title(header);
         }
+        let enrich_elapsed = t_enrich.elapsed();
 
         let total = headers.len();
         let items = headers
@@ -757,7 +789,16 @@ impl PlatformAdapter for CursorPlatform {
                     agent_group: None,
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        app_log::perf(format!(
+            "cursor.list_sessions collected={collected} after_filter={after_filter} page={} collect={:?} filter={:?} enrich={:?} total={:?}",
+            items.len(),
+            collect_elapsed,
+            filter_elapsed,
+            enrich_elapsed,
+            t0.elapsed()
+        ));
 
         SessionListResult { total, items }
     }
@@ -767,22 +808,29 @@ impl PlatformAdapter for CursorPlatform {
         session_key: &str,
         alias_map: &HashMap<String, String>,
     ) -> Result<SessionDetail, String> {
+        let t0 = Instant::now();
         let session_key = session_key
             .strip_prefix(TRANSCRIPT_SESSION_PREFIX)
             .unwrap_or(session_key);
 
         let conn = self.connect_readonly().ok();
+        let t_headers = Instant::now();
         let headers = self.collect_headers(conn.as_ref());
+        let headers_elapsed = t_headers.elapsed();
         let header = self.header_for(&headers, session_key).cloned();
 
         if let Ok((data, _)) = self.read_composer_data(session_key) {
+            let t_bubbles = Instant::now();
             let bubbles = self.read_bubbles(session_key)?;
+            let bubbles_elapsed = t_bubbles.elapsed();
             let mut blocks = self.blocks_from_composer(session_key, &data, &bubbles);
+            let mut used_transcript = false;
             if blocks.is_empty() {
                 if let Some(transcript) = self.find_transcript(session_key) {
                     if let Ok(transcript_blocks) = self.blocks_from_transcript(&transcript) {
                         if !transcript_blocks.is_empty() {
                             blocks = transcript_blocks;
+                            used_transcript = true;
                         }
                     }
                 }
@@ -797,19 +845,24 @@ impl PlatformAdapter for CursorPlatform {
             } else {
                 alias.clone()
             };
-            let cwd = header
-                .as_ref()
-                .map(CursorComposerHeader::cwd)
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| data.cwd());
-
+            app_log::perf(format!(
+                "cursor.get_session_detail key={session_key} headers={:?} bubbles={:?} blocks={} transcript_fallback={used_transcript} total={:?}",
+                headers_elapsed,
+                bubbles_elapsed,
+                blocks.len(),
+                t0.elapsed()
+            ));
             return Ok(SessionDetail {
                 platform: "cursor".to_string(),
                 session_key: session_key.to_string(),
                 session_id: session_key.to_string(),
                 title,
                 alias_title: alias,
-                cwd,
+                cwd: header
+                    .as_ref()
+                    .map(CursorComposerHeader::cwd)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| data.cwd()),
                 commands: build_commands("cursor", session_key),
                 blocks,
             });
@@ -828,6 +881,13 @@ impl PlatformAdapter for CursorPlatform {
         } else {
             alias.clone()
         };
+
+        app_log::perf(format!(
+            "cursor.get_session_detail key={session_key} headers={:?} transcript_only blocks={} total={:?}",
+            headers_elapsed,
+            blocks.len(),
+            t0.elapsed()
+        ));
 
         Ok(SessionDetail {
             platform: "cursor".to_string(),

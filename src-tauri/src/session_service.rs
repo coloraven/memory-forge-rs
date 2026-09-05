@@ -99,10 +99,9 @@ pub fn dashboard_summary(db: &DbState, settings: &AppSettings) -> Result<Dashboa
     let mut trend_map: HashMap<String, usize> = HashMap::new();
 
     let platform_names = dashboard_platform_names(settings);
-    eprintln!(
-        "[perf] dashboard_summary visible_platforms={:?}",
+    crate::app_log::perf(format!("dashboard_summary visible_platforms={:?}",
         platform_names
-    );
+    ));
     let db_path = db.db_path.clone();
     let settings = settings.clone();
     let platform_results = thread::scope(|scope| {
@@ -152,7 +151,7 @@ pub fn dashboard_summary(db: &DbState, settings: &AppSettings) -> Result<Dashboa
         });
     }
 
-    eprintln!("[perf] dashboard_summary: {:?}", t0.elapsed());
+    crate::app_log::perf(format!("dashboard_summary: {:?}", t0.elapsed()));
     Ok(DashboardSummary {
         platforms: platforms_summary,
         trend,
@@ -199,10 +198,10 @@ fn dashboard_platform_summary(
     );
     let total = result.total;
     let items = result.items;
-    eprintln!(
-        "[perf] dashboard({platform_name}) list ({total} active): {:?}",
+    crate::app_log::perf(format!(
+        "dashboard({platform_name}) list ({total} active): {:?}",
         tp.elapsed()
-    );
+    ));
 
     let summary = PlatformSummary {
         platform: platform_name.to_string(),
@@ -231,7 +230,7 @@ pub fn session_list(
     let aliases = database::get_alias_map(&db.conn, platform)?;
     let archived = database::get_flagged_keys(&db.conn, platform, "archived").unwrap_or_default();
     let favorites = database::get_flagged_keys(&db.conn, platform, "favorite").unwrap_or_default();
-    eprintln!("[perf] session_list({platform}) init: {:?}", t0.elapsed());
+    crate::app_log::perf(format!("session_list({platform}) init: {:?}", t0.elapsed()));
 
     let has_query = query.map(|q| !q.trim().is_empty()).unwrap_or(false);
 
@@ -263,11 +262,11 @@ pub fn session_list(
         let summary_cache = database::SessionSummaryCache::new(&db.conn);
         let content_index = database::SessionContentIndex::new(&db.conn);
         let result = adapter.list_sessions_with_cache(&aliases, None, 0, Some(&summary_cache));
-        eprintln!(
-            "[perf] session_list({platform}) list_all {} sessions: {:?}",
+        crate::app_log::perf(format!(
+            "session_list({platform}) list_all {} sessions: {:?}",
             result.items.len(),
             t1.elapsed()
-        );
+        ));
 
         let needle = query.unwrap().trim().to_lowercase();
         let t2 = Instant::now();
@@ -339,11 +338,11 @@ pub fn session_list(
             .map(|item| hit_items.get(&item.session_key).cloned().unwrap_or(item))
             .collect();
         let mut filtered = group_session_items(filtered);
-        eprintln!(
-            "[perf] session_list({platform}) indexed search -> {} hits: {:?}",
+        crate::app_log::perf(format!(
+            "session_list({platform}) indexed search -> {} hits: {:?}",
             filtered.len(),
             t2.elapsed()
-        );
+        ));
 
         let total = filtered.len();
         let start = offset.min(total);
@@ -355,7 +354,7 @@ pub fn session_list(
 
         let search_index = schedule_content_index_warmup(settings, platform, &db.db_path);
 
-        eprintln!("[perf] session_list({platform}) total: {:?}", t0.elapsed());
+        crate::app_log::perf(format!("session_list({platform}) total: {:?}", t0.elapsed()));
         Ok(SessionListResponse {
             total,
             items,
@@ -375,12 +374,12 @@ pub fn session_list(
             show_archived,
             Some(&summary_cache),
         );
-        eprintln!(
-            "[perf] session_list({platform}) paginated {} items: {:?}",
+        crate::app_log::perf(format!(
+            "session_list({platform}) paginated {} items: {:?}",
             page_result.total,
             t1.elapsed()
-        );
-        eprintln!("[perf] session_list({platform}) total: {:?}", t0.elapsed());
+        ));
+        crate::app_log::perf(format!("session_list({platform}) total: {:?}", t0.elapsed()));
         let search_index = schedule_content_index_warmup(settings, platform, &db.db_path);
         Ok(SessionListResponse {
             total: page_result.total,
@@ -743,12 +742,12 @@ pub fn session_batch_set_flag(
 ) -> Result<usize, String> {
     let t0 = Instant::now();
     let affected = database::batch_set_session_flag(&db.conn, platform, session_keys, flag, set)?;
-    eprintln!(
-        "[perf] session_batch_set_flag({platform}, {flag}, set={set}) {} keys -> {} affected: {:?}",
+    crate::app_log::perf(format!(
+        "session_batch_set_flag({platform}, {flag}, set={set}) {} keys -> {} affected: {:?}",
         session_keys.len(),
         affected,
         t0.elapsed()
-    );
+    ));
     Ok(affected)
 }
 
@@ -762,11 +761,11 @@ pub fn session_detail(
     let adapter = platforms::get_adapter(platform, settings)?;
     let aliases = database::get_alias_map(&db.conn, platform)?;
     let detail = adapter.get_session_detail(session_key, &aliases)?;
-    eprintln!(
-        "[perf] session_detail({platform}) {} blocks: {:?}",
+    crate::app_log::perf(format!(
+        "session_detail({platform}) {} blocks: {:?}",
         detail.blocks.len(),
         t0.elapsed()
-    );
+    ));
     Ok(detail)
 }
 
@@ -779,11 +778,11 @@ pub fn session_execution_output(
     let t0 = Instant::now();
     let adapter = platforms::get_adapter(platform, settings)?;
     let output = adapter.resolve_execution_output(session_key, edit_target)?;
-    eprintln!(
-        "[perf] session_execution_output({platform}) chars={}: {:?}",
+    crate::app_log::perf(format!(
+        "session_execution_output({platform}) chars={}: {:?}",
         output.chars().count(),
         t0.elapsed()
-    );
+    ));
     Ok(output)
 }
 
@@ -796,12 +795,12 @@ pub fn session_execution_outputs(
     let t0 = Instant::now();
     let adapter = platforms::get_adapter(platform, settings)?;
     let outputs = adapter.resolve_execution_outputs(session_key, edit_targets)?;
-    eprintln!(
-        "[perf] session_execution_outputs({platform}) requested={} found={}: {:?}",
+    crate::app_log::perf(format!(
+        "session_execution_outputs({platform}) requested={} found={}: {:?}",
         edit_targets.len(),
         outputs.len(),
         t0.elapsed()
-    );
+    ));
     Ok(outputs)
 }
 
