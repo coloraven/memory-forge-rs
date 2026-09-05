@@ -272,6 +272,25 @@ impl<'a> SessionContentIndex<'a> {
         .unwrap_or(false)
     }
 
+    /// True when a row exists for this session at the current schema version.
+    /// Used when a cheap fingerprint is unavailable (e.g. Cursor workspace-only composers).
+    pub fn has_entry(&self, platform: &str, session_key: &str) -> bool {
+        let Ok(conn) = self.conn.lock() else {
+            return false;
+        };
+        conn.query_row(
+            "SELECT COUNT(*)
+             FROM session_content_index_meta
+             WHERE platform = ?1
+               AND session_key = ?2
+               AND schema_version = ?3",
+            params![platform, session_key, SESSION_CONTENT_INDEX_VERSION],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false)
+    }
+
     pub fn get_matches(
         &self,
         platform: &str,

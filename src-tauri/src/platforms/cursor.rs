@@ -9,10 +9,14 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{
-    build_commands, extract_snippet, ContentMatch, PlatformAdapter, SessionDetail, SessionListItem,
-    SessionListResult, TimelineBlock, ToolCallBlock,
+    build_commands, content_entries_to_matches, push_bounded_index_entry, ContentMatch,
+    PlatformAdapter, SessionDetail, SessionKey, SessionListItem, SessionListResult, TimelineBlock,
+    ToolCallBlock,
 };
 use crate::app_log;
+use crate::database::{
+    SessionContentEntry, SessionContentIndex, SessionSummaryCache, SessionSummaryFingerprint,
+};
 
 const COMPOSER_HEADERS_KEY: &str = "composer.composerHeaders";
 const WORKSPACE_COMPOSER_DATA_KEY: &str = "composer.composerData";
@@ -429,9 +433,159 @@ impl CursorPlatform {
     }
 
     fn find_transcript(&self, composer_id: &str) -> Option<TranscriptRef> {
-        self.discover_transcripts()
-            .into_iter()
-            .find(|item| item.composer_id == composer_id)
+        let root = default_cursor_projects_home()?;
+        let projects = fs::read_dir(&root).ok()?;
+        for project in projects.flatten() {
+            let project_slug = project.file_name().to_string_lossy().to_string();
+            let path = project
+                .path()
+                .join("agent-transcripts")
+                .join(composer_id)
+                .join(format!("{composer_id}.jsonl"));
+            if !path.is_file() {
+                continue;
+            }
+            let updated_at_ms = fs::metadata(&path)
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as i64)
+                .unwrap_or(0);
+            return Some(TranscriptRef {
+                composer_id: composer_id.to_string(),
+                path,
+                project_slug,
+                updated_at_ms,
+            });
+        }
+        None
+    }
+
+    fn kv_content_fingerprint(
+        conn: &Connection,
+        composer_id: &str,
+    ) -> Option<SessionSummaryFingerprint> {
+        if !Self::table_exists(conn, "cursorDiskKV") {
+            return None;
+        }
+        let (start, end) = bubble_key_bounds(composer_id);
+        let (bubble_bytes, bubble_count): (i64, i64) = conn
+            .query_row(
+                "SELECT COALESCE(SUM(LENGTH(value)), 0), COUNT(*)
+                 FROM cursorDiskKV
+                 WHERE key >= ?1 AND key < ?2",
+                params![start, end],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok()?;
+        let composer_bytes: i64 = conn
+            .query_row(
+                "SELECT LENGTH(value) FROM cursorDiskKV WHERE key = ?1",
+                params![format!("composerData:{composer_id}")],
+                |row| row.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        if bubble_bytes == 0 && composer_bytes == 0 {
+            return None;
+        }
+        Some(SessionSummaryFingerprint {
+            file_size: bubble_bytes.saturating_add(composer_bytes),
+            modified_at: format!("b{bubble_count}:v{bubble_bytes}:c{composer_bytes}"),
+        })
+    }
+
+    fn content_fingerprint_fast(&self, composer_id: &str) -> Option<SessionSummaryFingerprint> {
+        if let Ok(conn) = self.connect_readonly() {
+            if let Some(fp) = Self::kv_content_fingerprint(&conn, composer_id) {
+                return Some(fp);
+            }
+        }
+        self.find_transcript(composer_id)
+            .and_then(|transcript| SessionSummaryCache::fingerprint(&transcript.path))
+    }
+
+    fn content_fingerprint(&self, composer_id: &str) -> Option<SessionSummaryFingerprint> {
+        if let Some(fp) = self.content_fingerprint_fast(composer_id) {
+            return Some(fp);
+        }
+
+        let root = self.workspace_storage_dir();
+        if let Ok(entries) = fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let db_path = entry.path().join("state.vscdb");
+                let Ok(conn) = Self::connect_readonly_path(&db_path) else {
+                    continue;
+                };
+                if let Some(fp) = Self::kv_content_fingerprint(&conn, composer_id) {
+                    return Some(fp);
+                }
+            }
+        }
+        None
+    }
+
+    fn searchable_content_entries(&self, session_key: &str) -> Vec<SessionContentEntry> {
+        let mut entries = Vec::new();
+        let mut indexed_bytes = 0usize;
+
+        if let Ok((data, _)) = self.read_composer_data(session_key) {
+            if let Ok(bubbles) = self.read_bubbles(session_key) {
+                for (index, header) in data.full_conversation_headers_only.iter().enumerate() {
+                    let Some(bubble) = bubbles.get(&header.bubble_id) else {
+                        continue;
+                    };
+                    let role = bubble_role(bubble.bubble_type.or(header.bubble_type))
+                        .unwrap_or("assistant");
+                    let mut texts = vec![bubble.text.clone()];
+                    if let Some(thinking) = thinking_text(bubble) {
+                        texts.push(thinking);
+                    }
+                    if let Some(tool) = bubble.tool_former_data.as_ref() {
+                        if let Some(name) = tool.get("name").and_then(Value::as_str) {
+                            texts.push(name.to_string());
+                        }
+                        if let Some(raw_args) = tool.get("rawArgs").and_then(Value::as_str) {
+                            texts.push(raw_args.to_string());
+                        }
+                        if let Some(result) = tool.get("result").and_then(Value::as_str) {
+                            texts.push(result.to_string());
+                        }
+                    }
+                    let entry = SessionContentEntry::any_text(index, role, texts);
+                    if !push_bounded_index_entry(&mut entries, &mut indexed_bytes, entry) {
+                        break;
+                    }
+                }
+                return entries;
+            }
+        }
+
+        let Some(transcript) = self.find_transcript(session_key) else {
+            return entries;
+        };
+        let Ok(blocks) = self.blocks_from_transcript(&transcript) else {
+            return entries;
+        };
+        for (index, block) in blocks.into_iter().enumerate() {
+            let mut texts = vec![block.content];
+            for tool in block.tool_calls {
+                texts.push(tool.name);
+                if let Some(input) = tool.input {
+                    texts.push(input);
+                }
+                if let Some(output) = tool.output {
+                    texts.push(output);
+                }
+            }
+            let entry = SessionContentEntry::any_text(index, block.role, texts);
+            if !push_bounded_index_entry(&mut entries, &mut indexed_bytes, entry) {
+                break;
+            }
+        }
+        entries
     }
 
     fn read_composer_data_from_conn(
@@ -741,6 +895,31 @@ impl CursorComposerData {
 }
 
 impl PlatformAdapter for CursorPlatform {
+    fn list_session_keys(&self) -> Option<Vec<SessionKey>> {
+        let conn = self.connect_readonly().ok();
+        if conn.is_none()
+            && !self.workspace_storage_dir().is_dir()
+            && default_cursor_projects_home().is_none()
+        {
+            return Some(Vec::new());
+        }
+        let (headers, transcript_ids) = self.collect_headers(conn.as_ref());
+        Some(
+            headers
+                .into_iter()
+                .filter(|header| {
+                    self.should_show_list_item(header, &transcript_ids, conn.as_ref())
+                })
+                .map(|header| {
+                    SessionKey::standalone(
+                        header.composer_id.clone(),
+                        header.updated_at_value() as i128,
+                    )
+                })
+                .collect(),
+        )
+    }
+
     fn list_sessions(
         &self,
         alias_map: &HashMap<String, String>,
@@ -997,80 +1176,71 @@ impl PlatformAdapter for CursorPlatform {
         !self.content_search(session_key, query).is_empty()
     }
 
+    fn warm_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let Some(index) = index else {
+            return false;
+        };
+        let Some(fingerprint) = self.content_fingerprint(session_key) else {
+            return false;
+        };
+        if index.is_current("cursor", session_key, &fingerprint) {
+            return true;
+        }
+        let entries = self.searchable_content_entries(session_key);
+        index
+            .replace("cursor", session_key, &fingerprint, &entries)
+            .is_ok()
+    }
+
+    fn has_current_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let Some(index) = index else {
+            return false;
+        };
+        if let Some(fingerprint) = self.content_fingerprint_fast(session_key) {
+            return index.is_current("cursor", session_key, &fingerprint);
+        }
+        // Workspace-only composers: rely on background warm + periodic recheck.
+        index.has_entry("cursor", session_key)
+    }
+
     fn content_search(&self, session_key: &str, query: &str) -> Vec<ContentMatch> {
         let needle = query.trim().to_lowercase();
         if needle.is_empty() {
             return Vec::new();
         }
+        content_entries_to_matches(self.searchable_content_entries(session_key), &needle)
+    }
 
-        if let Ok((data, _)) = self.read_composer_data(session_key) {
-            let Ok(bubbles) = self.read_bubbles(session_key) else {
-                return Vec::new();
-            };
-            let mut matches = Vec::new();
-            for (index, header) in data.full_conversation_headers_only.iter().enumerate() {
-                let Some(bubble) = bubbles.get(&header.bubble_id) else {
-                    continue;
-                };
-                let role = bubble_role(bubble.bubble_type.or(header.bubble_type))
-                    .unwrap_or("assistant")
-                    .to_string();
-                let mut haystacks = vec![bubble.text.clone()];
-                if let Some(thinking) = thinking_text(bubble) {
-                    haystacks.push(thinking);
-                }
-                if let Some(tool) = bubble.tool_former_data.as_ref() {
-                    if let Some(name) = tool.get("name").and_then(Value::as_str) {
-                        haystacks.push(name.to_string());
-                    }
-                    if let Some(raw_args) = tool.get("rawArgs").and_then(Value::as_str) {
-                        haystacks.push(raw_args.to_string());
-                    }
-                }
-                for text in haystacks {
-                    if text.to_lowercase().contains(&needle) {
-                        matches.push(ContentMatch {
-                            snippet: extract_snippet(&text, &needle),
-                            match_index: index,
-                            role: role.clone(),
-                        });
-                        break;
-                    }
-                }
-            }
-            matches.sort_by_key(|item| item.match_index);
-            return matches;
-        }
-
-        let Some(transcript) = self.find_transcript(session_key) else {
+    fn content_search_with_index(
+        &self,
+        session_key: &str,
+        query: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> Vec<ContentMatch> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
             return Vec::new();
-        };
-        let Ok(blocks) = self.blocks_from_transcript(&transcript) else {
-            return Vec::new();
-        };
-        let mut matches = Vec::new();
-        for (index, block) in blocks.iter().enumerate() {
-            let mut haystacks = vec![block.content.clone()];
-            for tool in &block.tool_calls {
-                haystacks.push(tool.name.clone());
-                if let Some(input) = &tool.input {
-                    haystacks.push(input.clone());
-                }
-                if let Some(output) = &tool.output {
-                    haystacks.push(output.clone());
-                }
-            }
-            for text in haystacks {
-                if text.to_lowercase().contains(&needle) {
-                    matches.push(ContentMatch {
-                        snippet: extract_snippet(&text, &needle),
-                        match_index: index,
-                        role: block.role.clone(),
-                    });
-                    break;
-                }
-            }
         }
+        let Some(index) = index else {
+            return self.content_search(session_key, &needle);
+        };
+        let Some(fingerprint) = self.content_fingerprint(session_key) else {
+            return self.content_search(session_key, &needle);
+        };
+        if let Some(entries) = index.get_matches("cursor", session_key, &fingerprint, &needle) {
+            return content_entries_to_matches(entries, &needle);
+        }
+        let entries = self.searchable_content_entries(session_key);
+        let matches = content_entries_to_matches(entries.clone(), &needle);
+        let _ = index.replace("cursor", session_key, &fingerprint, &entries);
         matches
     }
 }

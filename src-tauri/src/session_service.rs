@@ -89,7 +89,17 @@ fn index_jobs() -> &'static Mutex<HashMap<String, IndexJobState>> {
 }
 
 fn content_index_supported(platform: &str) -> bool {
-    matches!(platform, "claude" | "codex" | "pi" | "grok")
+    matches!(
+        platform,
+        "claude"
+            | "codex"
+            | "pi"
+            | "grok"
+            | "cursor"
+            | "chat2db-local"
+            | "chat2db-community"
+            | "chat2db-pro"
+    )
 }
 
 pub fn dashboard_summary(db: &DbState, settings: &AppSettings) -> Result<DashboardSummary, String> {
@@ -830,7 +840,13 @@ pub fn session_edit_message(
         edit_target,
         &old_content,
         content,
-    )
+    )?;
+    // Keep search index fresh after local edits without changing edit semantics.
+    if content_index_supported(platform) {
+        let index = database::SessionContentIndex::new(&db.conn);
+        let _ = adapter.warm_content_index(session_key, Some(&index));
+    }
+    Ok(())
 }
 
 const TOOL_EDIT_TARGET_PREFIX: &str = "tool-call::";

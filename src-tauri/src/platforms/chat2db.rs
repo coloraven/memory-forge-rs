@@ -8,8 +8,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{
-    build_commands, extract_snippet, tool_text_from_value, ContentMatch, PlatformAdapter,
-    SessionDetail, SessionListItem, SessionListResult, TimelineBlock, ToolCallBlock,
+    build_commands, content_entries_to_matches, push_bounded_index_entry, tool_text_from_value,
+    ContentMatch, PlatformAdapter, SessionDetail, SessionKey, SessionListItem, SessionListResult,
+    TimelineBlock, ToolCallBlock,
+};
+use crate::database::{
+    SessionContentEntry, SessionContentIndex, SessionSummaryCache,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,9 +232,47 @@ impl Chat2DbPlatform {
         }
         Ok(())
     }
+
+    fn searchable_content_entries(&self, session_key: &str) -> Vec<SessionContentEntry> {
+        let Ok(body) = self.read_messages(session_key) else {
+            return Vec::new();
+        };
+        let mut entries = Vec::new();
+        let mut indexed_bytes = 0usize;
+        for (index, message) in body.messages.iter().enumerate() {
+            let mut texts = vec![message.content.clone()];
+            if let Some(rc) = message.reasoning_content.as_ref() {
+                texts.push(reasoning_search_text(rc));
+            }
+            let role = if message.role.trim().is_empty() {
+                "assistant"
+            } else {
+                message.role.as_str()
+            };
+            let entry = SessionContentEntry::any_text(index, role, texts);
+            if !push_bounded_index_entry(&mut entries, &mut indexed_bytes, entry) {
+                break;
+            }
+        }
+        entries
+    }
 }
 
 impl PlatformAdapter for Chat2DbPlatform {
+    fn list_session_keys(&self) -> Option<Vec<SessionKey>> {
+        if !self.history_dir().is_dir() {
+            return Some(Vec::new());
+        }
+        Some(
+            self.list_index_entries()
+                .into_iter()
+                .map(|entry| {
+                    SessionKey::standalone(entry.id.clone(), gmt_to_millis(entry.gmt_modified.as_ref()) as i128)
+                })
+                .collect(),
+        )
+    }
+
     fn list_sessions(
         &self,
         alias_map: &HashMap<String, String>,
@@ -465,32 +507,74 @@ impl PlatformAdapter for Chat2DbPlatform {
         !self.content_search(session_key, query).is_empty()
     }
 
+    fn warm_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let Some(index) = index else {
+            return false;
+        };
+        let path = self.session_path(session_key);
+        let Some(fingerprint) = SessionSummaryCache::fingerprint(&path) else {
+            return false;
+        };
+        let platform = self.flavor.platform_id();
+        if index.is_current(platform, session_key, &fingerprint) {
+            return true;
+        }
+        let entries = self.searchable_content_entries(session_key);
+        index
+            .replace(platform, session_key, &fingerprint, &entries)
+            .is_ok()
+    }
+
+    fn has_current_content_index(
+        &self,
+        session_key: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> bool {
+        let path = self.session_path(session_key);
+        let (Some(index), Some(fingerprint)) =
+            (index, SessionSummaryCache::fingerprint(&path))
+        else {
+            return false;
+        };
+        index.is_current(self.flavor.platform_id(), session_key, &fingerprint)
+    }
+
     fn content_search(&self, session_key: &str, query: &str) -> Vec<ContentMatch> {
         let needle = query.trim().to_lowercase();
         if needle.is_empty() {
             return Vec::new();
         }
-        let Ok(body) = self.read_messages(session_key) else {
-            return Vec::new();
-        };
+        content_entries_to_matches(self.searchable_content_entries(session_key), &needle)
+    }
 
-        let mut matches = Vec::new();
-        for (index, message) in body.messages.iter().enumerate() {
-            let mut haystacks = vec![message.content.clone()];
-            if let Some(rc) = message.reasoning_content.as_ref() {
-                haystacks.push(reasoning_search_text(rc));
-            }
-            for text in haystacks {
-                if text.to_lowercase().contains(&needle) {
-                    matches.push(ContentMatch {
-                        snippet: extract_snippet(&text, &needle),
-                        match_index: index,
-                        role: message.role.clone(),
-                    });
-                    break;
-                }
-            }
+    fn content_search_with_index(
+        &self,
+        session_key: &str,
+        query: &str,
+        index: Option<&SessionContentIndex<'_>>,
+    ) -> Vec<ContentMatch> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
         }
+        let Some(index) = index else {
+            return self.content_search(session_key, &needle);
+        };
+        let path = self.session_path(session_key);
+        let Some(fingerprint) = SessionSummaryCache::fingerprint(&path) else {
+            return self.content_search(session_key, &needle);
+        };
+        let platform = self.flavor.platform_id();
+        if let Some(entries) = index.get_matches(platform, session_key, &fingerprint, &needle) {
+            return content_entries_to_matches(entries, &needle);
+        }
+        let entries = self.searchable_content_entries(session_key);
+        let matches = content_entries_to_matches(entries.clone(), &needle);
+        let _ = index.replace(platform, session_key, &fingerprint, &entries);
         matches
     }
 }
