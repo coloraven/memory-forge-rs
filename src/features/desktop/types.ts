@@ -40,6 +40,7 @@ export type DesktopSnapshot = {
   configFile: string;
   dataDir: string;
   dbPath: string;
+  programLogPath: string;
   trayAvailable: boolean;
   autostartSupported: boolean;
   settings: DesktopSettings;

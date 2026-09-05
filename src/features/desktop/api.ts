@@ -71,6 +71,7 @@ function defaultWebSnapshot(): DesktopSnapshot {
     configFile: "browser://local-storage/settings.json",
     dataDir: "browser://cache",
     dbPath: "browser://cache/memory-forge.db",
+    programLogPath: "browser://cache/logs/memory-forge.log",
     trayAvailable: false,
     autostartSupported: false,
     settings: defaultSettings,

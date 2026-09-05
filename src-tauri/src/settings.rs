@@ -290,6 +290,7 @@ pub struct DesktopSnapshot {
     pub config_file: String,
     pub data_dir: String,
     pub db_path: String,
+    pub program_log_path: String,
     pub tray_available: bool,
     pub autostart_supported: bool,
     pub settings: AppSettings,
@@ -516,6 +517,11 @@ fn snapshot_from_settings(
         config_file: config_dir.join(SETTINGS_FILE_NAME).display().to_string(),
         data_dir: data_dir.display().to_string(),
         db_path,
+        program_log_path: data_dir
+            .join("logs")
+            .join("memory-forge.log")
+            .display()
+            .to_string(),
         tray_available: shell::tray_available(),
         autostart_supported,
         settings,

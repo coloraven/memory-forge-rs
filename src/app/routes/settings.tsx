@@ -308,7 +308,7 @@ export default function SettingsPage() {
               checked={snapshot.settings.recordProgramLogs ?? false}
               description={
                 snapshot.settings.recordProgramLogs
-                  ? `${t("recordProgramLogsDesc")} ${t("recordProgramLogsPath")}: ${snapshot.dataDir}/logs/memory-forge.log`
+                  ? `${t("recordProgramLogsDesc")} ${t("recordProgramLogsPath")}: ${snapshot.programLogPath}`
                   : t("recordProgramLogsDesc")
               }
               label={t("recordProgramLogs")}
