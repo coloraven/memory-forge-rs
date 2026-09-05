@@ -19,6 +19,7 @@ import {
   Terminal,
   X,
   Zap,
+  Database,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "@/features/desktop/api";
@@ -52,6 +53,9 @@ const platformConfigs: Record<
   cursor: { label: "Cursor", icon: MousePointer2, color: "text-sky-400", hoverColor: "group-hover:text-sky-300" },
   opencode: { label: "OpenCode", icon: Code, color: "text-emerald-400", hoverColor: "group-hover:text-emerald-300" },
   zcode: { label: "ZCode", icon: Zap, color: "text-amber-400", hoverColor: "group-hover:text-amber-300" },
+  "chat2db-local": { label: "Chat2DB Local", icon: Database, color: "text-teal-400", hoverColor: "group-hover:text-teal-300" },
+  "chat2db-community": { label: "Chat2DB Community", icon: Database, color: "text-emerald-400", hoverColor: "group-hover:text-emerald-300" },
+  "chat2db-pro": { label: "Chat2DB Pro", icon: Database, color: "text-cyan-400", hoverColor: "group-hover:text-cyan-300" },
   kiro: { label: "Kiro CLI", icon: Sparkles, color: "text-purple-400", hoverColor: "group-hover:text-purple-300" },
   "kiro-ide": { label: "Kiro IDE", icon: Sparkles, color: "text-purple-400", hoverColor: "group-hover:text-purple-300" },
   gemini: { label: "Gemini", icon: Gem, color: "text-rose-400", hoverColor: "group-hover:text-rose-300" },

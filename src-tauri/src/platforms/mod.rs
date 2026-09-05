@@ -1,3 +1,4 @@
+pub mod chat2db;
 pub mod claude;
 pub mod codex;
 pub mod cursor;
@@ -476,6 +477,39 @@ pub fn get_adapter(
                 .unwrap_or_else(zcode::default_zcode_db_path);
             Ok(Box::new(zcode::ZCodePlatform::new(path)))
         }
+        "chat2db-local" => {
+            let path = settings
+                .chat2db_local_home
+                .as_ref()
+                .map(PathBuf::from)
+                .unwrap_or_else(chat2db::default_chat2db_local_home);
+            Ok(Box::new(chat2db::Chat2DbPlatform::new(
+                chat2db::Chat2DbFlavor::Local,
+                path,
+            )))
+        }
+        "chat2db-community" => {
+            let path = settings
+                .chat2db_community_home
+                .as_ref()
+                .map(PathBuf::from)
+                .unwrap_or_else(chat2db::default_chat2db_community_home);
+            Ok(Box::new(chat2db::Chat2DbPlatform::new(
+                chat2db::Chat2DbFlavor::Community,
+                path,
+            )))
+        }
+        "chat2db-pro" => {
+            let path = settings
+                .chat2db_pro_home
+                .as_ref()
+                .map(PathBuf::from)
+                .unwrap_or_else(chat2db::default_chat2db_pro_home);
+            Ok(Box::new(chat2db::Chat2DbPlatform::new(
+                chat2db::Chat2DbFlavor::Pro,
+                path,
+            )))
+        }
         "kiro" => {
             let path = settings
                 .kiro_home
@@ -547,6 +581,7 @@ pub fn build_commands(platform: &str, session_id: &str) -> HashMap<String, Strin
             m
         }
         "zcode" => HashMap::new(),
+        "chat2db-local" | "chat2db-community" | "chat2db-pro" => HashMap::new(),
         "cursor" => HashMap::new(),
         "kiro" => {
             let mut m = HashMap::new();

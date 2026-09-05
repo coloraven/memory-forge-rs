@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, Bot, Brain, Code, Flame, Terminal, Sparkles, MousePointer2, Gem, Orbit, Pi, Zap } from "lucide-react";
+import { ArrowRight, Bot, Brain, Code, Flame, Terminal, Sparkles, MousePointer2, Gem, Orbit, Pi, Zap, Database } from "lucide-react";
 import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import { AppLogo } from "@/components/logo";
@@ -59,6 +59,36 @@ const platformMeta = [
     hoverGlow: "hover:shadow-[0_8px_30px_rgba(245,158,11,0.12)] hover:-translate-y-1"
   },
   {
+    key: "chat2db-local",
+    label: "Chat2DB Local",
+    icon: Database,
+    to: "/chat2db-local",
+    gradient: "from-teal-500/10 to-cyan-600/5",
+    border: "border-teal-500/20 hover:border-cyan-500/40",
+    iconBg: "bg-teal-500/15 text-teal-400 group-hover:scale-110",
+    hoverGlow: "hover:shadow-[0_8px_30px_rgba(20,184,166,0.12)] hover:-translate-y-1"
+  },
+  {
+    key: "chat2db-community",
+    label: "Chat2DB Community",
+    icon: Database,
+    to: "/chat2db-community",
+    gradient: "from-emerald-500/10 to-teal-600/5",
+    border: "border-emerald-500/20 hover:border-teal-500/40",
+    iconBg: "bg-emerald-500/15 text-emerald-400 group-hover:scale-110",
+    hoverGlow: "hover:shadow-[0_8px_30px_rgba(16,185,129,0.12)] hover:-translate-y-1"
+  },
+  {
+    key: "chat2db-pro",
+    label: "Chat2DB Pro",
+    icon: Database,
+    to: "/chat2db-pro",
+    gradient: "from-cyan-500/10 to-blue-600/5",
+    border: "border-cyan-500/20 hover:border-blue-500/40",
+    iconBg: "bg-cyan-500/15 text-cyan-400 group-hover:scale-110",
+    hoverGlow: "hover:shadow-[0_8px_30px_rgba(6,182,212,0.12)] hover:-translate-y-1"
+  },
+  {
     key: "kiro",
     label: "Kiro CLI",
     icon: Sparkles,
@@ -114,7 +144,7 @@ export default function DashboardPage() {
   const { snapshot, loading, t, state, dispatch } = useDesktop();
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
-  const visiblePlatforms = snapshot?.settings?.visiblePlatforms ?? ["claude", "codex", "cursor", "opencode", "zcode", "grok", "pi"];
+  const visiblePlatforms = snapshot?.settings?.visiblePlatforms ?? ["claude", "codex", "cursor", "opencode", "zcode", "chat2db-local", "chat2db-community", "chat2db-pro", "grok", "pi"];
   const visiblePlatformsKey = visiblePlatforms.join("|");
   const snapshotReady = Boolean(snapshot);
 

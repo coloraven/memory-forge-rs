@@ -16,6 +16,7 @@ import {
   Orbit,
   Pi,
   Zap,
+  Database,
   SquareTerminal,
   type LucideIcon,
 } from "lucide-react";
@@ -40,6 +41,9 @@ const navigation: Array<{
   { to: "/cursor", labelKey: "platformCursor", icon: MousePointer2, navigationId: "cursor" },
   { to: "/opencode", labelKey: "platformOpencode", icon: Code, navigationId: "opencode" },
   { to: "/zcode", labelKey: "platformZcode", icon: Zap, navigationId: "zcode" },
+  { to: "/chat2db-local", labelKey: "platformChat2dbLocal", icon: Database, navigationId: "chat2db-local" },
+  { to: "/chat2db-community", labelKey: "platformChat2dbCommunity", icon: Database, navigationId: "chat2db-community" },
+  { to: "/chat2db-pro", labelKey: "platformChat2dbPro", icon: Database, navigationId: "chat2db-pro" },
   { to: "/kiro", labelKey: "platformKiro", icon: Sparkles, navigationId: "kiro" },
   { to: "/kiro-ide", labelKey: "platformKiroIde", icon: Sparkles, navigationId: "kiro-ide" },
   { to: "/gemini", labelKey: "platformGemini", icon: Gem, navigationId: "gemini" },
@@ -75,6 +79,9 @@ export default function ShellLayout() {
     "cursor",
     "opencode",
     "zcode",
+    "chat2db-local",
+    "chat2db-community",
+    "chat2db-pro",
     "grok",
     "pi",
   ];

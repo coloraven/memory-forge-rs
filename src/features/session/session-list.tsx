@@ -51,6 +51,9 @@ const platformColors = {
   codex: 'bg-gradient-to-br from-orange-500 to-red-500',
   opencode: 'bg-gradient-to-br from-green-500 to-emerald-600',
   zcode: 'bg-gradient-to-br from-amber-400 to-orange-600',
+  'chat2db-local': 'bg-gradient-to-br from-teal-400 to-cyan-600',
+  'chat2db-community': 'bg-gradient-to-br from-emerald-400 to-teal-600',
+  'chat2db-pro': 'bg-gradient-to-br from-cyan-400 to-blue-600',
   kiro: 'bg-gradient-to-br from-purple-500 to-violet-600',
   'kiro-ide': 'bg-gradient-to-br from-fuchsia-500 to-purple-600',
   cursor: 'bg-gradient-to-br from-sky-400 to-blue-600',
@@ -413,6 +416,9 @@ export function SessionList() {
               if (currentPlatform === 'kiro-ide') return 'Kiro IDE'
               if (currentPlatform === 'opencode') return 'OpenCode'
               if (currentPlatform === 'zcode') return 'ZCode'
+              if (currentPlatform === 'chat2db-local') return 'Chat2DB Local'
+              if (currentPlatform === 'chat2db-community') return 'Chat2DB Community'
+              if (currentPlatform === 'chat2db-pro') return 'Chat2DB Pro'
               if (currentPlatform === 'pi') return 'Pi'
               if (currentPlatform === 'grok') return 'Grok Build'
               return currentPlatform.charAt(0).toUpperCase() + currentPlatform.slice(1)
@@ -753,6 +759,9 @@ function SessionCard({ session, isSelected, selectedSessionKey, showArchived, se
                 platform === 'codex' && "bg-gradient-to-b from-orange-400 to-red-500",
                 platform === 'opencode' && "bg-gradient-to-b from-green-400 to-emerald-500",
                 platform === 'zcode' && "bg-gradient-to-b from-amber-400 to-orange-500",
+                platform === 'chat2db-local' && "bg-gradient-to-b from-teal-400 to-cyan-500",
+                platform === 'chat2db-community' && "bg-gradient-to-b from-emerald-400 to-teal-500",
+                platform === 'chat2db-pro' && "bg-gradient-to-b from-cyan-400 to-blue-500",
                 platform === 'kiro' && "bg-gradient-to-b from-purple-400 to-violet-500",
                 platform === 'kiro-ide' && "bg-gradient-to-b from-fuchsia-400 to-purple-500",
                 platform === 'gemini' && "bg-gradient-to-b from-blue-400 to-indigo-500",
@@ -781,7 +790,7 @@ function SessionCard({ session, isSelected, selectedSessionKey, showArchived, se
             "w-7 h-7 rounded-xl flex items-center justify-center text-white font-black text-xs flex-shrink-0 shadow-lg shadow-black/10 border border-white/10 select-none",
             platformColors[platform as keyof typeof platformColors] || platformColors.claude
           )}>
-            {platform === 'kiro-ide' ? 'K' : platform === 'opencode' ? 'O' : platform === 'zcode' ? 'Z' : platform === 'pi' ? 'P' : platform === 'grok' ? 'G' : platform[0].toUpperCase()}
+            {platform === 'kiro-ide' ? 'K' : platform === 'opencode' ? 'O' : platform === 'zcode' ? 'Z' : platform === 'chat2db-local' || platform === 'chat2db-community' || platform === 'chat2db-pro' ? 'C' : platform === 'pi' ? 'P' : platform === 'grok' ? 'G' : platform[0].toUpperCase()}
           </span>
           <h3 className={cn("font-bold text-sm truncate min-w-0 transition-colors duration-200 flex-1", highlightAsSelection ? "text-primary" : "text-foreground group-hover:text-foreground")}>
             {session.displayTitle || session.sessionId || untitledLabel}

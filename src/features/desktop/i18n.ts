@@ -17,6 +17,9 @@ export type MessageKey =
   | "platformCursor"
   | "platformOpencode"
   | "platformZcode"
+  | "platformChat2dbLocal"
+  | "platformChat2dbCommunity"
+  | "platformChat2dbPro"
   | "platformKiro"
   | "platformKiroIde"
   | "platformPi"
@@ -240,6 +243,9 @@ export type MessageKey =
   | "cursorHomePath"
   | "opencodePath"
   | "zcodePath"
+  | "chat2dbLocalHome"
+  | "chat2dbCommunityHome"
+  | "chat2dbProHome"
   | "kiroHome"
   | "kiroIdeHome"
   | "geminiHome"
@@ -342,6 +348,9 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     platformCursor: "Cursor",
     platformOpencode: "OpenCode",
     platformZcode: "ZCode",
+    platformChat2dbLocal: "Chat2DB Local",
+    platformChat2dbCommunity: "Chat2DB Community",
+    platformChat2dbPro: "Chat2DB Pro",
     platformKiro: "Kiro CLI",
     platformKiroIde: "Kiro IDE",
     platformPi: "Pi",
@@ -558,6 +567,9 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "cursorHomePath": "Cursor 数据目录",
     "opencodePath": "OpenCode 数据库路径",
     "zcodePath": "ZCode 数据库路径",
+    "chat2dbLocalHome": "Chat2DB Local 数据目录",
+    "chat2dbCommunityHome": "Chat2DB Community 数据目录",
+    "chat2dbProHome": "Chat2DB Pro 数据目录",
     "kiroHome": "Kiro 主目录路径",
     "kiroIdeHome": "Kiro IDE 数据目录",
     "geminiHome": "Gemini 数据目录",
@@ -659,6 +671,9 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     platformCursor: "Cursor",
     platformOpencode: "OpenCode",
     platformZcode: "ZCode",
+    platformChat2dbLocal: "Chat2DB Local",
+    platformChat2dbCommunity: "Chat2DB Community",
+    platformChat2dbPro: "Chat2DB Pro",
     platformKiro: "Kiro CLI",
     platformKiroIde: "Kiro IDE",
     platformPi: "Pi",
@@ -875,6 +890,9 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "cursorHomePath": "Cursor Data Directory",
     "opencodePath": "OpenCode Database Path",
     "zcodePath": "ZCode Database Path",
+    "chat2dbLocalHome": "Chat2DB Local Data Directory",
+    "chat2dbCommunityHome": "Chat2DB Community Data Directory",
+    "chat2dbProHome": "Chat2DB Pro Data Directory",
     "kiroHome": "Kiro Home Path",
     "kiroIdeHome": "Kiro IDE Data Directory",
     "geminiHome": "Gemini Home Directory",

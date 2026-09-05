@@ -15,6 +15,9 @@ export type DesktopSettings = {
   cursorHome: string | null;
   opencodePath: string | null;
   zcodePath: string | null;
+  chat2dbLocalHome: string | null;
+  chat2dbCommunityHome: string | null;
+  chat2dbProHome: string | null;
   kiroHome: string | null;
   kiroIdeHome: string | null;
   geminiHome: string | null;
@@ -42,7 +45,7 @@ export type DesktopSnapshot = {
 
 // ─── Session ───
 
-export type Platform = "claude" | "codex" | "cursor" | "opencode" | "zcode" | "kiro" | "kiro-ide" | "gemini" | "grok" | "pi";
+export type Platform = "claude" | "codex" | "cursor" | "opencode" | "zcode" | "chat2db-local" | "chat2db-community" | "chat2db-pro" | "kiro" | "kiro-ide" | "gemini" | "grok" | "pi";
 
 export type ContentMatch = {
   snippet: string;

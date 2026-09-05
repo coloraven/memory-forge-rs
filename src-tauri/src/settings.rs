@@ -31,6 +31,12 @@ pub struct AppSettings {
     #[serde(default)]
     pub zcode_path: Option<String>,
     #[serde(default)]
+    pub chat2db_local_home: Option<String>,
+    #[serde(default)]
+    pub chat2db_community_home: Option<String>,
+    #[serde(default)]
+    pub chat2db_pro_home: Option<String>,
+    #[serde(default)]
     pub kiro_home: Option<String>,
     #[serde(default)]
     pub kiro_ide_home: Option<String>,
@@ -55,6 +61,9 @@ fn default_visible_platforms() -> Vec<String> {
         "cursor".to_string(),
         "opencode".to_string(),
         "zcode".to_string(),
+        "chat2db-local".to_string(),
+        "chat2db-community".to_string(),
+        "chat2db-pro".to_string(),
         "grok".to_string(),
         "pi".to_string(),
     ]
@@ -113,6 +122,26 @@ fn migrate_settings(mut settings: AppSettings) -> AppSettings {
         "grok".to_string(),
         "pi".to_string(),
     ];
+    let legacy_default_with_zcode_no_chat2db = vec![
+        "claude".to_string(),
+        "codex".to_string(),
+        "cursor".to_string(),
+        "opencode".to_string(),
+        "zcode".to_string(),
+        "grok".to_string(),
+        "pi".to_string(),
+    ];
+    let legacy_default_with_chat2db_no_community = vec![
+        "claude".to_string(),
+        "codex".to_string(),
+        "cursor".to_string(),
+        "opencode".to_string(),
+        "zcode".to_string(),
+        "chat2db-local".to_string(),
+        "chat2db-pro".to_string(),
+        "grok".to_string(),
+        "pi".to_string(),
+    ];
 
     if settings.visible_platforms == legacy_default_without_cursor
         || settings.visible_platforms == legacy_default_with_cursor
@@ -120,6 +149,8 @@ fn migrate_settings(mut settings: AppSettings) -> AppSettings {
         || settings.visible_platforms == legacy_default_with_grok_after_pi
         || settings.visible_platforms == legacy_default_without_cursor_current
         || settings.visible_platforms == legacy_default_with_cursor_no_zcode
+        || settings.visible_platforms == legacy_default_with_zcode_no_chat2db
+        || settings.visible_platforms == legacy_default_with_chat2db_no_community
     {
         settings.visible_platforms = default_visible_platforms();
         settings.navigation_items = Some(default_navigation_items(&settings.visible_platforms));
@@ -147,8 +178,32 @@ fn migrate_settings(mut settings: AppSettings) -> AppSettings {
         "grok".to_string(),
         "pi".to_string(),
     ];
+    let legacy_nav_with_zcode_no_chat2db = vec![
+        "claude".to_string(),
+        "codex".to_string(),
+        "terminal-sessions".to_string(),
+        "cursor".to_string(),
+        "opencode".to_string(),
+        "zcode".to_string(),
+        "grok".to_string(),
+        "pi".to_string(),
+    ];
+    let legacy_nav_with_chat2db_no_community = vec![
+        "claude".to_string(),
+        "codex".to_string(),
+        "terminal-sessions".to_string(),
+        "cursor".to_string(),
+        "opencode".to_string(),
+        "zcode".to_string(),
+        "chat2db-local".to_string(),
+        "chat2db-pro".to_string(),
+        "grok".to_string(),
+        "pi".to_string(),
+    ];
     if (settings.navigation_items.as_ref() == Some(&legacy_nav_without_cursor)
-        || settings.navigation_items.as_ref() == Some(&legacy_nav_with_cursor_no_zcode))
+        || settings.navigation_items.as_ref() == Some(&legacy_nav_with_cursor_no_zcode)
+        || settings.navigation_items.as_ref() == Some(&legacy_nav_with_zcode_no_chat2db)
+        || settings.navigation_items.as_ref() == Some(&legacy_nav_with_chat2db_no_community))
         && settings.visible_platforms == default_visible_platforms()
     {
         settings.navigation_items = Some(default_navigation_items(&settings.visible_platforms));
@@ -171,6 +226,9 @@ impl Default for AppSettings {
             cursor_home: None,
             opencode_path: None,
             zcode_path: None,
+            chat2db_local_home: None,
+            chat2db_community_home: None,
+            chat2db_pro_home: None,
             kiro_home: None,
             kiro_ide_home: None,
             gemini_home: None,
@@ -197,6 +255,9 @@ pub struct AppSettingsPatch {
     pub cursor_home: Option<Option<String>>,
     pub opencode_path: Option<Option<String>>,
     pub zcode_path: Option<Option<String>>,
+    pub chat2db_local_home: Option<Option<String>>,
+    pub chat2db_community_home: Option<Option<String>>,
+    pub chat2db_pro_home: Option<Option<String>>,
     pub kiro_home: Option<Option<String>>,
     pub kiro_ide_home: Option<Option<String>>,
     pub gemini_home: Option<Option<String>>,
@@ -319,6 +380,15 @@ pub fn update_settings(
     }
     if let Some(zcode_path) = patch.zcode_path {
         settings.zcode_path = zcode_path.filter(|s| !s.trim().is_empty());
+    }
+    if let Some(chat2db_local_home) = patch.chat2db_local_home {
+        settings.chat2db_local_home = chat2db_local_home.filter(|s| !s.trim().is_empty());
+    }
+    if let Some(chat2db_community_home) = patch.chat2db_community_home {
+        settings.chat2db_community_home = chat2db_community_home.filter(|s| !s.trim().is_empty());
+    }
+    if let Some(chat2db_pro_home) = patch.chat2db_pro_home {
+        settings.chat2db_pro_home = chat2db_pro_home.filter(|s| !s.trim().is_empty());
     }
 
     if let Some(kiro_home) = patch.kiro_home {

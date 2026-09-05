@@ -21,6 +21,9 @@ const PLATFORM_ITEMS = [
   { id: "terminal-sessions", labelKey: "terminalSessions" as const, isPlatform: false },
   { id: "opencode", labelKey: "platformOpencode" as const, isPlatform: true },
   { id: "zcode", labelKey: "platformZcode" as const, isPlatform: true },
+  { id: "chat2db-local", labelKey: "platformChat2dbLocal" as const, isPlatform: true },
+  { id: "chat2db-community", labelKey: "platformChat2dbCommunity" as const, isPlatform: true },
+  { id: "chat2db-pro", labelKey: "platformChat2dbPro" as const, isPlatform: true },
   { id: "grok", labelKey: "platformGrok" as const, isPlatform: true },
   { id: "pi", labelKey: "platformPi" as const, isPlatform: true },
   { id: "cursor", labelKey: "platformCursor" as const, isPlatform: true },
@@ -105,6 +108,9 @@ export default function SettingsPage() {
     "cursor",
     "opencode",
     "zcode",
+    "chat2db-local",
+    "chat2db-community",
+    "chat2db-pro",
     "grok",
     "pi",
   ];
@@ -115,6 +121,9 @@ export default function SettingsPage() {
     "cursor",
     "opencode",
     "zcode",
+    "chat2db-local",
+    "chat2db-community",
+    "chat2db-pro",
     "grok",
     "pi",
   ];
@@ -481,6 +490,27 @@ export default function SettingsPage() {
               onSave={(v) => updateSettings({ zcodePath: v || null })}
               pickMode="file"
               value={snapshot.settings.zcodePath ?? ""}
+            />
+            <PathRow
+              defaultHint="~/.chat2db_local_edition"
+              label={t("chat2dbLocalHome")}
+              onSave={(v) => updateSettings({ chat2dbLocalHome: v || null })}
+              pickMode="directory"
+              value={snapshot.settings.chat2dbLocalHome ?? ""}
+            />
+            <PathRow
+              defaultHint="~/.chat2db-community"
+              label={t("chat2dbCommunityHome")}
+              onSave={(v) => updateSettings({ chat2dbCommunityHome: v || null })}
+              pickMode="directory"
+              value={snapshot.settings.chat2dbCommunityHome ?? ""}
+            />
+            <PathRow
+              defaultHint="~/.chat2db"
+              label={t("chat2dbProHome")}
+              onSave={(v) => updateSettings({ chat2dbProHome: v || null })}
+              pickMode="directory"
+              value={snapshot.settings.chat2dbProHome ?? ""}
             />
             <PathRow
               defaultHint="~/.kiro"
