@@ -1,0 +1,165 @@
+# Build Memory Forge packages without creating a GitHub Release.
+#
+# Triggers:
+# - push to feat/** or fix/** (default compile path; see no-local-compile)
+# - push whose commit message contains `编译` or `[build]` (any listed branch)
+# - manual workflow_dispatch
+#
+# Download artifacts via local proxy: HTTPS_PROXY=http://127.0.0.1:10811
+
+name: CI Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "feat/**"
+      - "fix/**"
+    paths-ignore:
+      - "**/*.md"
+      - ".specstory/**"
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: ci-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Check compile intent
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+    steps:
+      - name: Decide whether to build
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          should_build=false
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            should_build=true
+          elif [[ "$REF_NAME" == feat/* || "$REF_NAME" == fix/* ]]; then
+            should_build=true
+          elif printf '%s' "$COMMIT_MESSAGE" | grep -Eq '编译|\[build\]'; then
+            should_build=true
+          fi
+          echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT_NAME ref=$REF_NAME should_build=$should_build"
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: gate
+    if: needs.gate.outputs.should_build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            rust-targets: ""
+            tauri-args: ""
+            artifact-name: windows-x64
+          - platform: macos-15-intel
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            tauri-args: --target universal-apple-darwin
+            artifact-name: macos-universal
+          - platform: ubuntu-22.04
+            rust-targets: ""
+            tauri-args: ""
+            artifact-name: linux-amd64
+
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          shared-key: ci-build-${{ matrix.artifact-name }}
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app (no release)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: ${{ matrix.tauri-args }}
+
+      - name: Package Windows portable zip
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $exe = "src-tauri\target\release\memory-forge.exe"
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
+          New-Item -ItemType Directory -Force -Path dist-ci | Out-Null
+          $zip = "dist-ci\Memory.Forge_ci_${{ github.sha }}_x64-portable.zip"
+          Compress-Archive -Path $exe -DestinationPath $zip
+
+      - name: Upload Windows artifacts
+        if: matrix.platform == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-forge-${{ matrix.artifact-name }}-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*
+            src-tauri/target/release/bundle/msi/*
+            src-tauri/target/release/memory-forge.exe
+            dist-ci/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload macOS artifacts
+        if: matrix.platform == 'macos-15-intel'
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-forge-${{ matrix.artifact-name }}-${{ github.sha }}
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Linux artifacts
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-forge-${{ matrix.artifact-name }}-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/appimage/*
+            src-tauri/target/release/bundle/deb/*
+          if-no-files-found: error
+          retention-days: 14
