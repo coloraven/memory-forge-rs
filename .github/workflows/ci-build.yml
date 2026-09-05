@@ -1,9 +1,11 @@
 # Build Memory Forge packages without creating a GitHub Release.
 #
-# Triggers:
-# - push to feat/** or fix/** (default compile path; see no-local-compile)
-# - push whose commit message contains `编译` or `[build]` (any listed branch)
-# - manual workflow_dispatch
+# Default: Windows only.
+# Optional: enable macOS / Linux via workflow_dispatch inputs.
+#
+# Other triggers (still Windows-only unless manually dispatched with extras):
+# - push to feat/** or fix/**
+# - push whose commit message contains `编译` or `[build]`
 #
 # Download artifacts via local proxy: HTTPS_PROXY=http://127.0.0.1:10811
 
@@ -11,6 +13,15 @@ name: CI Build
 
 on:
   workflow_dispatch:
+    inputs:
+      build_macos:
+        description: Also build macOS universal
+        type: boolean
+        default: false
+      build_linux:
+        description: Also build Linux amd64
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -34,6 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_build: ${{ steps.check.outputs.should_build }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Decide whether to build
         id: check
@@ -54,26 +66,50 @@ jobs:
           echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
           echo "event=$EVENT_NAME ref=$REF_NAME should_build=$should_build"
 
+      - name: Build platform matrix (Windows default)
+        id: matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BUILD_MACOS: ${{ inputs.build_macos }}
+          BUILD_LINUX: ${{ inputs.build_linux }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          matrix = [{
+              "platform": "windows-latest",
+              "rust_targets": "",
+              "tauri_args": "",
+              "artifact_name": "windows-x64",
+          }]
+          if os.environ.get("EVENT_NAME") == "workflow_dispatch":
+              if os.environ.get("BUILD_MACOS", "false").lower() == "true":
+                  matrix.append({
+                      "platform": "macos-15-intel",
+                      "rust_targets": "aarch64-apple-darwin,x86_64-apple-darwin",
+                      "tauri_args": "--target universal-apple-darwin",
+                      "artifact_name": "macos-universal",
+                  })
+              if os.environ.get("BUILD_LINUX", "false").lower() == "true":
+                  matrix.append({
+                      "platform": "ubuntu-22.04",
+                      "rust_targets": "",
+                      "tauri_args": "",
+                      "artifact_name": "linux-amd64",
+                  })
+          print(f"matrix={json.dumps(matrix)}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"matrix={json.dumps(matrix)}\n")
+          PY
+
   build:
-    name: Build (${{ matrix.platform }})
+    name: Build (${{ matrix.artifact_name }})
     needs: gate
     if: needs.gate.outputs.should_build == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: windows-latest
-            rust-targets: ""
-            tauri-args: ""
-            artifact-name: windows-x64
-          - platform: macos-15-intel
-            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
-            tauri-args: --target universal-apple-darwin
-            artifact-name: macos-universal
-          - platform: ubuntu-22.04
-            rust-targets: ""
-            tauri-args: ""
-            artifact-name: linux-amd64
+        include: ${{ fromJSON(needs.gate.outputs.matrix) }}
 
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 120
@@ -90,13 +126,13 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust-targets }}
+          targets: ${{ matrix.rust_targets }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
-          shared-key: ci-build-${{ matrix.artifact-name }}
+          shared-key: ci-build-${{ matrix.artifact_name }}
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -117,7 +153,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: ${{ matrix.tauri-args }}
+          args: ${{ matrix.tauri_args }}
 
       - name: Package Windows portable zip
         if: matrix.platform == 'windows-latest'
@@ -133,7 +169,7 @@ jobs:
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: memory-forge-${{ matrix.artifact-name }}-${{ github.sha }}
+          name: memory-forge-${{ matrix.artifact_name }}-${{ github.sha }}
           path: |
             src-tauri/target/release/bundle/nsis/*
             src-tauri/target/release/bundle/msi/*
@@ -146,7 +182,7 @@ jobs:
         if: matrix.platform == 'macos-15-intel'
         uses: actions/upload-artifact@v4
         with:
-          name: memory-forge-${{ matrix.artifact-name }}-${{ github.sha }}
+          name: memory-forge-${{ matrix.artifact_name }}-${{ github.sha }}
           path: |
             src-tauri/target/universal-apple-darwin/release/bundle/dmg/*
             src-tauri/target/universal-apple-darwin/release/bundle/macos/*
@@ -157,7 +193,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         uses: actions/upload-artifact@v4
         with:
-          name: memory-forge-${{ matrix.artifact-name }}-${{ github.sha }}
+          name: memory-forge-${{ matrix.artifact_name }}-${{ github.sha }}
           path: |
             src-tauri/target/release/bundle/appimage/*
             src-tauri/target/release/bundle/deb/*

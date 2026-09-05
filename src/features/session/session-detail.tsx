@@ -345,7 +345,7 @@ export function SessionDetail() {
   }
 
   const handleEraseToolCall = async (blockId: string, toolCall: ToolCallBlock) => {
-    if (currentPlatform !== 'opencode') return
+    if (currentPlatform !== 'opencode' && currentPlatform !== 'zcode') return
     const sessionKey = sessionDetail.sessionKey
     if (!await confirm({
       title: t('session.eraseToolCall'),
@@ -1190,7 +1190,7 @@ export function SessionDetail() {
                       onEdit={() => handleEditBlock(block)}
                       onErase={() => handleEraseBlock(block)}
                       onEraseToolCall={(toolCall) => handleEraseToolCall(block.id, toolCall)}
-                      canEraseToolCalls={currentPlatform === 'opencode'}
+                      canEraseToolCalls={currentPlatform === 'opencode' || currentPlatform === 'zcode'}
                       erasingToolCallId={erasingToolCallId}
                       onLoadExecutionOutput={() => handleLoadExecutionOutput(block)}
                       loadingExecutionOutput={Boolean(block.editTarget && loadingExecutionTargets.has(block.editTarget))}

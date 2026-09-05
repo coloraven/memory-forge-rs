@@ -7,6 +7,7 @@ pub mod kiro;
 pub mod kiro_ide;
 pub mod opencode;
 pub mod pi;
+pub mod zcode;
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -467,6 +468,14 @@ pub fn get_adapter(
                 .unwrap_or_else(|| home.join(".local/share/opencode/opencode.db"));
             Ok(Box::new(opencode::OpenCodePlatform::new(path)))
         }
+        "zcode" => {
+            let path = settings
+                .zcode_path
+                .as_ref()
+                .map(PathBuf::from)
+                .unwrap_or_else(zcode::default_zcode_db_path);
+            Ok(Box::new(zcode::ZCodePlatform::new(path)))
+        }
         "kiro" => {
             let path = settings
                 .kiro_home
@@ -531,13 +540,14 @@ pub fn build_commands(platform: &str, session_id: &str) -> HashMap<String, Strin
             m.insert("resume".into(), format!("codex resume {session_id}"));
             m
         }
-        "cursor" => HashMap::new(),
         "opencode" => {
             let mut m = HashMap::new();
             m.insert("resume".into(), format!("opencode -s {session_id}"));
             m.insert("fork".into(), format!("opencode -s {session_id} --fork"));
             m
         }
+        "zcode" => HashMap::new(),
+        "cursor" => HashMap::new(),
         "kiro" => {
             let mut m = HashMap::new();
             m.insert(

@@ -20,6 +20,7 @@ const PLATFORM_ITEMS = [
   { id: "codex", labelKey: "platformCodex" as const, isPlatform: true },
   { id: "terminal-sessions", labelKey: "terminalSessions" as const, isPlatform: false },
   { id: "opencode", labelKey: "platformOpencode" as const, isPlatform: true },
+  { id: "zcode", labelKey: "platformZcode" as const, isPlatform: true },
   { id: "grok", labelKey: "platformGrok" as const, isPlatform: true },
   { id: "pi", labelKey: "platformPi" as const, isPlatform: true },
   { id: "cursor", labelKey: "platformCursor" as const, isPlatform: true },
@@ -103,6 +104,7 @@ export default function SettingsPage() {
     "codex",
     "cursor",
     "opencode",
+    "zcode",
     "grok",
     "pi",
   ];
@@ -112,6 +114,7 @@ export default function SettingsPage() {
     "terminal-sessions",
     "cursor",
     "opencode",
+    "zcode",
     "grok",
     "pi",
   ];
@@ -471,6 +474,13 @@ export default function SettingsPage() {
               onSave={(v) => updateSettings({ opencodePath: v || null })}
               pickMode="file"
               value={snapshot.settings.opencodePath ?? ""}
+            />
+            <PathRow
+              defaultHint="~/.zcode/cli/db/db.sqlite"
+              label={t("zcodePath")}
+              onSave={(v) => updateSettings({ zcodePath: v || null })}
+              pickMode="file"
+              value={snapshot.settings.zcodePath ?? ""}
             />
             <PathRow
               defaultHint="~/.kiro"

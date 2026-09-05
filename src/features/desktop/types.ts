@@ -14,6 +14,7 @@ export type DesktopSettings = {
   codexProjectRoot: string | null;
   cursorHome: string | null;
   opencodePath: string | null;
+  zcodePath: string | null;
   kiroHome: string | null;
   kiroIdeHome: string | null;
   geminiHome: string | null;
@@ -41,7 +42,7 @@ export type DesktopSnapshot = {
 
 // ─── Session ───
 
-export type Platform = "claude" | "codex" | "cursor" | "opencode" | "kiro" | "kiro-ide" | "gemini" | "grok" | "pi";
+export type Platform = "claude" | "codex" | "cursor" | "opencode" | "zcode" | "kiro" | "kiro-ide" | "gemini" | "grok" | "pi";
 
 export type ContentMatch = {
   snippet: string;

@@ -18,6 +18,7 @@ import {
   SquareTerminal,
   Terminal,
   X,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "@/features/desktop/api";
@@ -50,6 +51,7 @@ const platformConfigs: Record<
   codex: { label: "Codex", icon: Terminal, color: "text-blue-400", hoverColor: "group-hover:text-blue-300" },
   cursor: { label: "Cursor", icon: MousePointer2, color: "text-sky-400", hoverColor: "group-hover:text-sky-300" },
   opencode: { label: "OpenCode", icon: Code, color: "text-emerald-400", hoverColor: "group-hover:text-emerald-300" },
+  zcode: { label: "ZCode", icon: Zap, color: "text-amber-400", hoverColor: "group-hover:text-amber-300" },
   kiro: { label: "Kiro CLI", icon: Sparkles, color: "text-purple-400", hoverColor: "group-hover:text-purple-300" },
   "kiro-ide": { label: "Kiro IDE", icon: Sparkles, color: "text-purple-400", hoverColor: "group-hover:text-purple-300" },
   gemini: { label: "Gemini", icon: Gem, color: "text-rose-400", hoverColor: "group-hover:text-rose-300" },

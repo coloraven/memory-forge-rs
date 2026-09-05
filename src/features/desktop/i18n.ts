@@ -16,6 +16,7 @@ export type MessageKey =
   | "platformCodex"
   | "platformCursor"
   | "platformOpencode"
+  | "platformZcode"
   | "platformKiro"
   | "platformKiroIde"
   | "platformPi"
@@ -238,6 +239,7 @@ export type MessageKey =
   | "codexProjectRootPath"
   | "cursorHomePath"
   | "opencodePath"
+  | "zcodePath"
   | "kiroHome"
   | "kiroIdeHome"
   | "geminiHome"
@@ -339,6 +341,7 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     platformCodex: "Codex",
     platformCursor: "Cursor",
     platformOpencode: "OpenCode",
+    platformZcode: "ZCode",
     platformKiro: "Kiro CLI",
     platformKiroIde: "Kiro IDE",
     platformPi: "Pi",
@@ -554,6 +557,7 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "codexProjectRootPath": "Codex 项目根目录",
     "cursorHomePath": "Cursor 数据目录",
     "opencodePath": "OpenCode 数据库路径",
+    "zcodePath": "ZCode 数据库路径",
     "kiroHome": "Kiro 主目录路径",
     "kiroIdeHome": "Kiro IDE 数据目录",
     "geminiHome": "Gemini 数据目录",
@@ -654,6 +658,7 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     platformCodex: "Codex",
     platformCursor: "Cursor",
     platformOpencode: "OpenCode",
+    platformZcode: "ZCode",
     platformKiro: "Kiro CLI",
     platformKiroIde: "Kiro IDE",
     platformPi: "Pi",
@@ -869,6 +874,7 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     "codexProjectRootPath": "Codex Project Root",
     "cursorHomePath": "Cursor Data Directory",
     "opencodePath": "OpenCode Database Path",
+    "zcodePath": "ZCode Database Path",
     "kiroHome": "Kiro Home Path",
     "kiroIdeHome": "Kiro IDE Data Directory",
     "geminiHome": "Gemini Home Directory",

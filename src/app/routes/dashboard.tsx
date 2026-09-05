@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, Bot, Brain, Code, Flame, Terminal, Sparkles, MousePointer2, Gem, Orbit, Pi } from "lucide-react";
+import { ArrowRight, Bot, Brain, Code, Flame, Terminal, Sparkles, MousePointer2, Gem, Orbit, Pi, Zap } from "lucide-react";
 import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import { AppLogo } from "@/components/logo";
@@ -47,6 +47,16 @@ const platformMeta = [
     border: "border-sky-500/20 hover:border-sky-500/40",
     iconBg: "bg-sky-500/15 text-sky-400 group-hover:scale-110",
     hoverGlow: "hover:shadow-[0_8px_30px_rgba(14,165,233,0.12)] hover:-translate-y-1"
+  },
+  {
+    key: "zcode",
+    label: "ZCode",
+    icon: Zap,
+    to: "/zcode",
+    gradient: "from-amber-500/10 to-orange-600/5",
+    border: "border-amber-500/20 hover:border-orange-500/40",
+    iconBg: "bg-amber-500/15 text-amber-400 group-hover:scale-110",
+    hoverGlow: "hover:shadow-[0_8px_30px_rgba(245,158,11,0.12)] hover:-translate-y-1"
   },
   {
     key: "kiro",
@@ -104,7 +114,7 @@ export default function DashboardPage() {
   const { snapshot, loading, t, state, dispatch } = useDesktop();
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
-  const visiblePlatforms = snapshot?.settings?.visiblePlatforms ?? ["claude", "codex", "cursor", "opencode", "grok", "pi"];
+  const visiblePlatforms = snapshot?.settings?.visiblePlatforms ?? ["claude", "codex", "cursor", "opencode", "zcode", "grok", "pi"];
   const visiblePlatformsKey = visiblePlatforms.join("|");
   const snapshotReady = Boolean(snapshot);
 

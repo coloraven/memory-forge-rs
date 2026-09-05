@@ -29,6 +29,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub opencode_path: Option<String>,
     #[serde(default)]
+    pub zcode_path: Option<String>,
+    #[serde(default)]
     pub kiro_home: Option<String>,
     #[serde(default)]
     pub kiro_ide_home: Option<String>,
@@ -52,6 +54,7 @@ fn default_visible_platforms() -> Vec<String> {
         "codex".to_string(),
         "cursor".to_string(),
         "opencode".to_string(),
+        "zcode".to_string(),
         "grok".to_string(),
         "pi".to_string(),
     ]
@@ -102,12 +105,21 @@ fn migrate_settings(mut settings: AppSettings) -> AppSettings {
         "grok".to_string(),
         "pi".to_string(),
     ];
+    let legacy_default_with_cursor_no_zcode = vec![
+        "claude".to_string(),
+        "codex".to_string(),
+        "cursor".to_string(),
+        "opencode".to_string(),
+        "grok".to_string(),
+        "pi".to_string(),
+    ];
 
     if settings.visible_platforms == legacy_default_without_cursor
         || settings.visible_platforms == legacy_default_with_cursor
         || settings.visible_platforms == legacy_default_with_pi
         || settings.visible_platforms == legacy_default_with_grok_after_pi
         || settings.visible_platforms == legacy_default_without_cursor_current
+        || settings.visible_platforms == legacy_default_with_cursor_no_zcode
     {
         settings.visible_platforms = default_visible_platforms();
         settings.navigation_items = Some(default_navigation_items(&settings.visible_platforms));
@@ -117,7 +129,7 @@ fn migrate_settings(mut settings: AppSettings) -> AppSettings {
         settings.navigation_items = Some(default_navigation_items(&settings.visible_platforms));
     }
 
-    // Upgrade the previous default nav (no Cursor) when platforms already include Cursor defaults.
+    // Upgrade previous default navs that omit Cursor / ZCode when platforms already match defaults.
     let legacy_nav_without_cursor = vec![
         "claude".to_string(),
         "codex".to_string(),
@@ -126,7 +138,17 @@ fn migrate_settings(mut settings: AppSettings) -> AppSettings {
         "grok".to_string(),
         "pi".to_string(),
     ];
-    if settings.navigation_items.as_ref() == Some(&legacy_nav_without_cursor)
+    let legacy_nav_with_cursor_no_zcode = vec![
+        "claude".to_string(),
+        "codex".to_string(),
+        "terminal-sessions".to_string(),
+        "cursor".to_string(),
+        "opencode".to_string(),
+        "grok".to_string(),
+        "pi".to_string(),
+    ];
+    if (settings.navigation_items.as_ref() == Some(&legacy_nav_without_cursor)
+        || settings.navigation_items.as_ref() == Some(&legacy_nav_with_cursor_no_zcode))
         && settings.visible_platforms == default_visible_platforms()
     {
         settings.navigation_items = Some(default_navigation_items(&settings.visible_platforms));
@@ -148,6 +170,7 @@ impl Default for AppSettings {
             codex_project_root: None,
             cursor_home: None,
             opencode_path: None,
+            zcode_path: None,
             kiro_home: None,
             kiro_ide_home: None,
             gemini_home: None,
@@ -173,6 +196,7 @@ pub struct AppSettingsPatch {
     pub codex_project_root: Option<Option<String>>,
     pub cursor_home: Option<Option<String>>,
     pub opencode_path: Option<Option<String>>,
+    pub zcode_path: Option<Option<String>>,
     pub kiro_home: Option<Option<String>>,
     pub kiro_ide_home: Option<Option<String>>,
     pub gemini_home: Option<Option<String>>,
@@ -292,6 +316,9 @@ pub fn update_settings(
 
     if let Some(opencode_path) = patch.opencode_path {
         settings.opencode_path = opencode_path.filter(|s| !s.trim().is_empty());
+    }
+    if let Some(zcode_path) = patch.zcode_path {
+        settings.zcode_path = zcode_path.filter(|s| !s.trim().is_empty());
     }
 
     if let Some(kiro_home) = patch.kiro_home {

@@ -15,6 +15,7 @@ import {
   Gem,
   Orbit,
   Pi,
+  Zap,
   SquareTerminal,
   type LucideIcon,
 } from "lucide-react";
@@ -38,6 +39,7 @@ const navigation: Array<{
   { to: "/terminal-sessions", labelKey: "terminalSessions", icon: SquareTerminal, navigationId: "terminal-sessions" },
   { to: "/cursor", labelKey: "platformCursor", icon: MousePointer2, navigationId: "cursor" },
   { to: "/opencode", labelKey: "platformOpencode", icon: Code, navigationId: "opencode" },
+  { to: "/zcode", labelKey: "platformZcode", icon: Zap, navigationId: "zcode" },
   { to: "/kiro", labelKey: "platformKiro", icon: Sparkles, navigationId: "kiro" },
   { to: "/kiro-ide", labelKey: "platformKiroIde", icon: Sparkles, navigationId: "kiro-ide" },
   { to: "/gemini", labelKey: "platformGemini", icon: Gem, navigationId: "gemini" },
@@ -70,7 +72,9 @@ export default function ShellLayout() {
     "claude",
     "codex",
     "terminal-sessions",
+    "cursor",
     "opencode",
+    "zcode",
     "grok",
     "pi",
   ];
