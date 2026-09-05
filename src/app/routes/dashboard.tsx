@@ -1,11 +1,15 @@
-import { useEffect, useState } from "react";
-import { ArrowRight, Bot, Brain, Code, Flame, Terminal, Sparkles, MousePointer2, Gem, Orbit, Pi, Zap, Database } from "lucide-react";
-import { Link } from "react-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowRight, Bot, Brain, Code, Flame, Terminal, Sparkles, MousePointer2, Gem, Orbit, Pi, Zap, Database, Search, User } from "lucide-react";
+import { Link, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { AppLogo } from "@/components/logo";
 import { useDesktop } from "@/features/desktop/provider";
 import { api } from "@/features/desktop/api";
+import type { Session } from "@/features/desktop/types";
 import { cn } from "@/lib/utils";
+
+const GLOBAL_SEARCH_LIMIT = 8;
 
 const platformMeta = [
   {
@@ -140,10 +144,40 @@ const platformMeta = [
   },
 ] as const;
 
+type GlobalHit = {
+  platform: string;
+  platformLabel: string;
+  session: Session;
+};
+
+function flattenHits(platform: string, platformLabel: string, sessions: Session[]): GlobalHit[] {
+  const hits: GlobalHit[] = [];
+  const walk = (items: Session[]) => {
+    for (const session of items) {
+      hits.push({ platform, platformLabel, session });
+      if (session.agentGroup?.children?.length) {
+        walk(session.agentGroup.children);
+      }
+    }
+  };
+  walk(sessions);
+  return hits;
+}
+
 export default function DashboardPage() {
   const { snapshot, loading, t, state, dispatch } = useDesktop();
+  const navigate = useNavigate();
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchHits, setSearchHits] = useState<GlobalHit[]>([]);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [indexIncomplete, setIndexIncomplete] = useState(false);
+  const searchRequestRef = useRef(0);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
   const visiblePlatforms = snapshot?.settings?.visiblePlatforms ?? ["claude", "codex", "cursor", "opencode", "zcode", "chat2db-local", "chat2db-community", "chat2db-pro", "grok", "pi"];
   const visiblePlatformsKey = visiblePlatforms.join("|");
   const snapshotReady = Boolean(snapshot);
@@ -182,11 +216,95 @@ export default function DashboardPage() {
     };
   }, [dispatch, snapshotReady, visiblePlatformsKey]);
 
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      searchRequestRef.current += 1;
+      setSearching(false);
+      setSearchHits([]);
+      setSearchTotal(0);
+      setIndexIncomplete(false);
+      return;
+    }
+
+    let cancelled = false;
+    const requestId = ++searchRequestRef.current;
+    setSearching(true);
+
+    const run = async () => {
+      const platforms = visiblePlatforms
+        .map((id) => platformMeta.find((item) => item.key === id))
+        .filter((item): item is (typeof platformMeta)[number] => Boolean(item));
+
+      const results = await Promise.all(
+        platforms.map(async (pm) => {
+          try {
+            const result = await api.getSessions(pm.key, q, GLOBAL_SEARCH_LIMIT, 0, false);
+            return { pm, result };
+          } catch (error) {
+            console.error(`Global search failed for ${pm.key}:`, error);
+            return null;
+          }
+        }),
+      );
+
+      if (cancelled || requestId !== searchRequestRef.current) return;
+
+      const hits: GlobalHit[] = [];
+      let total = 0;
+      let incomplete = false;
+      for (const entry of results) {
+        if (!entry) continue;
+        const { pm, result } = entry;
+        total += result.total;
+        if (result.searchIndex.supported && result.searchIndex.indexed < result.searchIndex.total) {
+          incomplete = true;
+        }
+        hits.push(...flattenHits(pm.key, pm.label, result.items).slice(0, GLOBAL_SEARCH_LIMIT));
+      }
+
+      hits.sort((a, b) => {
+        const aMatches = a.session.totalContentMatches ?? a.session.contentMatches?.length ?? 0;
+        const bMatches = b.session.totalContentMatches ?? b.session.contentMatches?.length ?? 0;
+        return bMatches - aMatches || b.session.updatedAt.localeCompare(a.session.updatedAt);
+      });
+
+      setSearchHits(hits);
+      setSearchTotal(total);
+      setIndexIncomplete(incomplete);
+      setSearching(false);
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchQuery, visiblePlatformsKey]);
+
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setSearchQuery(value), 300);
+  }, []);
+
+  const openHit = useCallback((hit: GlobalHit) => {
+    dispatch({ type: "setSearchQuery", payload: searchQuery.trim() });
+    dispatch({ type: "setSelectedSessionKey", payload: hit.session.sessionKey });
+    navigate(`/${hit.platform}`);
+  }, [dispatch, navigate, searchQuery]);
+
   const platforms = state.dashboard?.platforms ?? [];
   const displayPlatforms = visiblePlatforms.flatMap((platformId) => {
     const platform = platformMeta.find((item) => item.key === platformId);
     return platform ? [platform] : [];
   });
+  const hasSearch = searchQuery.trim().length > 0;
 
   return (
     <div className="flex h-full flex-col overflow-y-auto pr-2 pb-6">
@@ -223,6 +341,90 @@ export default function DashboardPage() {
                 : `${snapshot?.appName ?? "Memory Forge"} · v${snapshot?.version ?? "3.3.1"}`}
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* Global full-text search */}
+      <section className="mt-5 relative shrink-0 overflow-hidden rounded-[24px] border border-border/80 bg-gradient-to-br from-card/85 via-card/70 to-card/35 px-4 py-4 md:px-5 md:py-5 backdrop-blur-md shadow-lg shadow-black/5">
+        <div className="absolute -top-10 right-8 size-28 bg-primary/6 blur-[70px] rounded-full pointer-events-none" />
+        <div className="relative space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-2 px-0.5">
+            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-primary/80">
+              {t("dashboard.globalSearchHint")}
+            </p>
+            {hasSearch && !searching && (
+              <p className="text-xs text-quiet">
+                {t("dashboard.globalSearchResults", { count: searchTotal })}
+              </p>
+            )}
+          </div>
+          <div className="relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/50" />
+            <Input
+              placeholder={t("dashboard.globalSearch")}
+              value={searchInput}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              className="h-12 pl-11 text-sm bg-muted/20 border-border/40 hover:border-border/80 focus-visible:ring-1 focus-visible:ring-primary/40 focus-visible:border-primary/40 rounded-xl transition-all"
+            />
+          </div>
+          {hasSearch && indexIncomplete && (
+            <p className="text-xs text-amber-700 dark:text-amber-300 px-0.5">
+              {t("session.searchIndexIncomplete")}
+            </p>
+          )}
+          {hasSearch && (
+            <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+              {searching ? (
+                <div className="rounded-xl border border-border/40 bg-muted/15 px-4 py-6 text-center text-sm text-quiet">
+                  {t("dashboard.globalSearching")}
+                </div>
+              ) : searchHits.length === 0 ? (
+                <div className="rounded-xl border border-border/40 bg-muted/15 px-4 py-6 text-center text-sm text-quiet">
+                  {t("dashboard.globalSearchEmpty")}
+                </div>
+              ) : (
+                searchHits.map((hit) => (
+                  <button
+                    key={`${hit.platform}:${hit.session.sessionKey}`}
+                    type="button"
+                    onClick={() => openHit(hit)}
+                    className="group w-full text-left rounded-xl border border-border/40 bg-card/50 hover:bg-card/85 hover:border-primary/30 px-3.5 py-3 transition-all duration-200"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="shrink-0 rounded-lg border border-border/40 bg-muted/30 px-2 py-0.5 text-[10px] font-semibold text-quiet group-hover:text-foreground">
+                        {hit.platformLabel}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+                        {hit.session.displayTitle || hit.session.sessionId}
+                      </span>
+                      <ArrowRight className="size-3.5 shrink-0 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </div>
+                    {hit.session.preview && (
+                      <p className="mt-1.5 line-clamp-1 text-xs text-quiet break-all">
+                        {hit.session.preview}
+                      </p>
+                    )}
+                    {hit.session.contentMatches && hit.session.contentMatches.length > 0 && (
+                      <div className="mt-2 space-y-1.5">
+                        {hit.session.contentMatches.slice(0, 2).map((match, i) => (
+                          <div key={i} className="flex items-start gap-1.5 rounded-lg bg-amber-500/5 border border-amber-500/12 px-2.5 py-1.5">
+                            {match.role === "user" ? (
+                              <User className="size-3 shrink-0 mt-0.5 text-amber-400/60" />
+                            ) : (
+                              <Bot className="size-3 shrink-0 mt-0.5 text-amber-400/60" />
+                            )}
+                            <p className="text-[11px] leading-relaxed text-muted-foreground/80 line-clamp-2 break-all font-mono">
+                              {match.snippet}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
         </div>
       </section>
 

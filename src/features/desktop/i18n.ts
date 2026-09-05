@@ -26,6 +26,11 @@ export type MessageKey =
   | "platformGrok"
   // Dashboard
   | "welcomeTitle"
+  | "dashboard.globalSearch"
+  | "dashboard.globalSearchHint"
+  | "dashboard.globalSearchEmpty"
+  | "dashboard.globalSearchResults"
+  | "dashboard.globalSearching"
   | "welcomeDesc"
   | "totalSessions"
   | "sevenDayTrend"
@@ -363,6 +368,11 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     platformGrok: "Grok Build",
     welcomeTitle: "停止重开，直接编辑。",
     welcomeDesc: "AI 对话走偏了？别重新开始 — 直接改掉历史记录。注入上下文、纠正错误、删除废话，然后无缝继续对话。",
+    "dashboard.globalSearch": "搜索全部平台会话...",
+    "dashboard.globalSearchHint": "跨平台全文搜索标题与消息内容",
+    "dashboard.globalSearchEmpty": "未找到匹配会话",
+    "dashboard.globalSearchResults": "找到 {count} 个匹配",
+    "dashboard.globalSearching": "正在搜索...",
     totalSessions: "总会话数",
     sevenDayTrend: "7天趋势",
     memoryManipulation: "记忆操控",
@@ -692,6 +702,11 @@ const messages: Record<LocaleId, Record<MessageKey, string>> = {
     platformGrok: "Grok Build",
     welcomeTitle: "Stop resetting. Start editing.",
     welcomeDesc: "AI went off track? Don't restart — edit the history directly. Inject context, fix errors, remove noise, then seamlessly continue.",
+    "dashboard.globalSearch": "Search sessions across all platforms...",
+    "dashboard.globalSearchHint": "Full-text search across titles and message content",
+    "dashboard.globalSearchEmpty": "No matching sessions",
+    "dashboard.globalSearchResults": "{count} matches found",
+    "dashboard.globalSearching": "Searching...",
     totalSessions: "Total Sessions",
     sevenDayTrend: "7-Day Trend",
     memoryManipulation: "Memory Manipulation",
