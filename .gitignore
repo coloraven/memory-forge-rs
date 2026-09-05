@@ -24,3 +24,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local IDE / SpecStory artifacts
+.cursorindexingignore
+.specstory/
